@@ -1,0 +1,22 @@
+[Script Info]
+Title: Пример Substance
+ScriptType: v4.00+
+PlayResX: 1920
+PlayResY: 1080
+WrapStyle: 0
+ScaledBorderAndShadow: yes
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: Default,Arial,56,&H00FFFFFF,&H000000FF,&H00101010,&H80000000,0,0,0,0,100,100,0,0,1,2,1,2,40,40,40,1
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+Dialogue: 0,0:00:01.00,0:00:03.00,Default,Мика,0,0,0,,You came after all.
+Dialogue: 0,0:00:03.20,0:00:05.00,Default,Рэн,0,0,0,,I promised.
+Dialogue: 0,0:00:05.20,0:00:07.20,Default,Мика,0,0,0,,We should go.
+Dialogue: 0,0:00:07.40,0:00:10.00,Default,Мика,0,0,0,,The last train hasn't left yet.
+Dialogue: 0,0:00:10.20,0:00:12.20,Default,Рэн,0,0,0,,Then we still have time.
+Dialogue: 0,0:00:12.40,0:00:14.40,Default,Мика,0,0,0,,Do you have the tickets?
+Dialogue: 0,0:00:14.60,0:00:16.60,Default,Рэн,0,0,0,,Yes, both of them.
+Dialogue: 0,0:00:16.80,0:00:18.80,Default,Мика,0,0,0,,Let's go.

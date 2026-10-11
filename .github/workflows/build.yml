@@ -1,0 +1,61 @@
+name: Test and build alpha
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Install Python dependencies
+        run: python -m pip install -e ".[dev]"
+      - name: Install portable media libraries on macOS
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          mkdir -p build/micromamba
+          if [[ "$(uname -m)" == "arm64" ]]; then
+            media_platform=osx-arm64
+          else
+            media_platform=osx-64
+          fi
+          curl -L --fail "https://micro.mamba.pm/api/micromamba/$media_platform/latest" -o build/micromamba/package.tar.bz2
+          tar -xjf build/micromamba/package.tar.bz2 -C build/micromamba bin/micromamba
+          export MAMBA_ROOT_PREFIX="$PWD/build/mamba-root"
+          export CONDA_OVERRIDE_OSX=15.0
+          build/micromamba/bin/micromamba --no-rc create --yes --prefix "$PWD/build/portable" --channel conda-forge libass=0.17.5 ffmpeg=9.0.2
+          echo "SUBSTANCE_LIBASS=$PWD/build/portable/lib/libass.9.dylib" >> "$GITHUB_ENV"
+          echo "SUBSTANCE_FFPROBE=$PWD/build/portable/bin/ffprobe" >> "$GITHUB_ENV"
+      - uses: msys2/setup-msys2@v2
+        if: runner.os == 'Windows'
+        with:
+          msystem: UCRT64
+          update: true
+          install: mingw-w64-ucrt-x86_64-libass mingw-w64-ucrt-x86_64-ffmpeg
+      - name: Configure Windows libass
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          "SUBSTANCE_LIBASS=C:\msys64\ucrt64\bin\libass-9.dll" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "SUBSTANCE_FFPROBE=C:\msys64\ucrt64\bin\ffprobe.exe" | Out-File -FilePath $env:GITHUB_ENV -Append
+      - name: Test
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python -m pytest -q
+      - name: Compile package
+        run: python scripts/build.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Substance-0.1.0-alpha.4-${{ runner.os }}
+          path: |
+            dist/Substance.app
+            dist/Substance
+          retention-days: 14
