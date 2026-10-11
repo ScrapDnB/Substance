@@ -56,3 +56,19 @@
 - Прогон на минимальной поддерживаемой macOS 15, разные кодеки, большие проекты, медиа с VFR, длинные сеансы работы.
 - Developer ID, notarization, правила публичного распространения зависимостей и установщики — перед публичной публикацией.
 - Реальные проекты Dubbing Manager — после реализации адаптера, которая намеренно отложена.
+
+## 0.1.0-alpha.5 — projects, review and character cards
+
+Local validation on 2026-10-12:
+
+- Python 3.12 / Qt 6.10.2: **62 passed, 1 skipped**. The skip is the optional private ASS fixture suite. Tests cover schema 1 migration, round trips, unknown fields, proposal conflicts and rebasing, structural edits, atomic undo, character identity/export names, project-only persistence, warning filters, image orientation/cropping, card draft recovery and silent video.
+- Fusion/offscreen UI tests create notes and proposals through dialog buttons, drag and resize the crop rectangle, keep its aspect ratio and save the portrait into a card.
+- Real macOS window: **47 native chrome checks** and **26 project checks**. Project checks invoke macOS-style button signals, validate a real decoded video capture after seeking, crop/save/recrop, preserve a paused frame across mode changes, and reopen project data. Generated captures were visually inspected.
+- Packaged application launched with a schema 2 project, rendered its portrait and review counters, and reported a valid video frame, native toolbar and native glass sidebar. No QML runtime errors occurred.
+- Package signature passed `codesign --verify --deep --strict`. All **372** embedded Mach-O files meet macOS 15; the executable remains linked against SDK 27.
+
+Reproducible checks: `scripts/native_chrome_smoke.py` and
+`scripts/project_ui_smoke.py` on macOS with `QT_QPA_PLATFORM=cocoa`. Reports,
+screenshots and logs are local under `build/qa/` and excluded from Git.
+The macOS build is locally signed. Windows runtime, macOS 15 runtime and
+Developer ID/notarization remain outside this local validation.

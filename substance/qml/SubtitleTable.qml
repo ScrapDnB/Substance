@@ -43,7 +43,7 @@ Item {
                 Label { width: table.actorWidth; height: parent.height; verticalAlignment: Text.AlignVCenter; text: "Персонаж"; font.pixelSize: 11; color: table.colors.muted }
                 Label { width: table.translationMode ? table.textWidth / 2 : table.textWidth; height: parent.height; verticalAlignment: Text.AlignVCenter; text: table.translationMode ? "Оригинал" : "Текст"; font.pixelSize: 11; color: table.colors.muted }
                 Label { visible: table.translationMode; width: table.textWidth / 2; height: parent.height; verticalAlignment: Text.AlignVCenter; text: "Перевод"; font.pixelSize: 11; color: table.colors.muted }
-                Label { width: table.statusWidth; height: parent.height; verticalAlignment: Text.AlignVCenter; text: "Проверка"; font.pixelSize: 11; color: table.colors.muted }
+                Label { width: table.statusWidth; height: parent.height; verticalAlignment: Text.AlignVCenter; text: "Замечания"; font.pixelSize: 11; color: table.colors.muted }
             }
         }
         ListView {
@@ -70,7 +70,8 @@ Item {
                 required property string cueText
                 required property string originalText
                 required property string translatedText
-                required property string reviewStatus
+                required property int noteCount
+                required property int proposalCount
                 required property real cps
                 required property bool warning
                 required property string issues
@@ -89,8 +90,8 @@ Item {
                     Label { visible: !table.translationMode; width: table.timeWidth; height: parent.height; verticalAlignment: Text.AlignVCenter; text: row.endTime; font.family: backend.isMac ? "Menlo" : "Consolas"; font.pixelSize: 10; color: row.selected ? table.colors.selectedText : table.colors.text }
                     Label { width: table.actorWidth; rightPadding: 8; height: parent.height; verticalAlignment: Text.AlignVCenter; text: row.character || "—"; font.pixelSize: 12; color: row.selected ? table.colors.selectedText : table.colors.text; elide: Text.ElideRight }
                     Label { width: table.translationMode ? table.textWidth / 2 : table.textWidth; rightPadding: 12; height: parent.height; verticalAlignment: Text.AlignVCenter; text: table.translationMode ? row.originalText : row.cueText; font.pixelSize: 12; color: row.selected ? table.colors.selectedText : row.comment ? table.colors.muted : table.colors.text; elide: Text.ElideRight; textFormat: Text.PlainText }
-                    Label { visible: table.translationMode; width: table.textWidth / 2; rightPadding: 12; height: parent.height; verticalAlignment: Text.AlignVCenter; text: row.translatedText || "Без перевода"; font.pixelSize: 12; color: row.selected ? table.colors.selectedText : row.translatedText ? table.colors.text : table.colors.muted; elide: Text.ElideRight; textFormat: Text.PlainText }
-                    Label { width: table.statusWidth; height: parent.height; verticalAlignment: Text.AlignVCenter; text: row.warning ? "⚠ " + row.cps + " зн/с" : row.reviewStatus === "done" ? "✓ Готово" : row.reviewStatus === "review" ? "○ Проверить" : "○ Черновик"; font.pixelSize: 11; color: row.selected ? table.colors.selectedText : row.warning ? table.colors.warning : row.reviewStatus === "done" ? table.colors.success : table.colors.muted }
+                    Label { visible: table.translationMode; width: table.textWidth / 2; rightPadding: 12; height: parent.height; verticalAlignment: Text.AlignVCenter; text: row.translatedText || "—"; font.pixelSize: 12; color: row.selected ? table.colors.selectedText : row.translatedText ? table.colors.text : table.colors.muted; elide: Text.ElideRight; textFormat: Text.PlainText }
+                    Label { width: table.statusWidth; height: parent.height; verticalAlignment: Text.AlignVCenter; text: (row.warning ? "⚠ " : "") + (row.noteCount ? "✎ " + row.noteCount + " " : "") + (row.proposalCount ? "↔ " + row.proposalCount : ""); font.pixelSize: 11; color: row.selected ? table.colors.selectedText : row.warning ? table.colors.warning : table.colors.muted }
                 }
                 MouseArea {
                     anchors.fill: parent
@@ -125,9 +126,8 @@ Item {
         MenuItem { text: "Скопировать реплики"; onTriggered: backend.copyLines() }
         MenuItem { text: "Вставить реплики"; onTriggered: backend.pasteLines() }
         MenuSeparator { }
-        MenuItem { text: "Готово"; onTriggered: backend.batch("status", "done", false) }
-        MenuItem { text: "На проверку"; onTriggered: backend.batch("status", "review", false) }
-        MenuItem { text: "Черновик"; onTriggered: backend.batch("status", "draft", false) }
+        MenuItem { text: "Заметки и предложения…"; onTriggered: backend.openReviews() }
+        MenuItem { text: "Карточка персонажа…"; onTriggered: backend.openCharacters(backend.current.characterId || "") }
         MenuItem { text: "Сделать комментарием"; onTriggered: backend.batch("comment", "true", false) }
         MenuItem { text: "Сделать диалогом"; onTriggered: backend.batch("comment", "false", false) }
         MenuSeparator { }

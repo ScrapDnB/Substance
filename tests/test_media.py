@@ -123,11 +123,33 @@ def test_native_media_primes_a_paused_video_frame(app, media):
         assert controller.videoWidth == 320
         wait(100)
         assert not controller.playing
+        captures = []
+        controller.captured.connect(lambda image, timestamp, path: captures.append((image, timestamp, path)))
         controller.seek(1000)
+        controller.captureFrame()
         for _ in range(100):
-            if 900 <= controller.framePosition <= 1100:
+            if 900 <= controller.framePosition <= 1100 and captures:
                 break
             wait(50)
         assert 900 <= controller.framePosition <= 1100
+        assert len(captures) == 1
+        image, timestamp, path = captures[0]
+        assert (image.width(), image.height()) == (320, 180)
+        assert 900 <= timestamp <= 1100
+        assert path == str(media)
+        assert not controller.playing
     finally:
         controller.shutdown()
+
+
+def test_silent_video_has_empty_audio_without_error(app, tmp_path):
+    path = tmp_path / 'silent.mp4'
+    subprocess.run([ffmpeg_executable(), '-nostdin', '-v', 'error', '-f', 'lavfi', '-i', 'testsrc2=size=160x90:rate=24:duration=0.2', '-c:v', 'libx264', '-y', str(path)], check=True, timeout=30, **process_options())
+    results, errors = [], []
+    worker = AudioAnalysis(str(path), 200)
+    worker.completed.connect(lambda peaks, spectrum, frames: results.append((peaks, spectrum)))
+    worker.failed.connect(errors.append)
+    worker.run()
+    assert not errors
+    assert results[0][0].size == 0
+    assert results[0][1].shape == (0, 64)

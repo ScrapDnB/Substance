@@ -20,6 +20,11 @@ from .media import MediaController
 from .tasks import SpellingTask, ExtractTask
 from .timecode import format_time, parse_time, frame_time
 from .platform import reduce_motion
+from .project import sync_characters
+from .images import load_image, encode_image, decode_image, crop_image
+from PySide6.QtGui import QImage
+import difflib
+import html
 
 SHORTCUTS = {
     "new": "Ctrl+N", "open": "Ctrl+O", "save": "Ctrl+S", "saveAs": "Ctrl+Shift+S", "export": "Ctrl+E",
@@ -50,7 +55,7 @@ class LoadTask(QRunnable):
 
 
 class CueModel(QAbstractListModel):
-    ROLE_NAMES = ["sourceIndex", "number", "startTime", "endTime", "character", "cueText", "originalText", "translatedText", "reviewStatus", "cps", "warning", "issues", "selected", "comment"]
+    ROLE_NAMES = ["sourceIndex", "number", "startTime", "endTime", "character", "cueText", "originalText", "translatedText", "noteCount", "proposalCount", "cps", "warning", "issues", "selected", "comment"]
     def __init__(self, backend):
         super().__init__(backend)
         self.backend = backend
@@ -80,7 +85,7 @@ class CueModel(QAbstractListModel):
             if not backend.matches(cue, info):
                 continue
             self.visible.append(i)
-            self.cache.append({"sourceIndex": i, "number": i + 1, "startTime": format_time(cue.start), "endTime": format_time(cue.end), "character": cue.character, "cueText": plain_text(cue.output_text).replace("\n", "  ↵  "), "originalText": plain_text(cue.original).replace("\n", "  ↵  "), "translatedText": plain_text(cue.translation or "").replace("\n", "  ↵  "), "reviewStatus": cue.status, "cps": info["cps"], "warning": info["warning"], "issues": "\n".join(info["messages"]), "selected": i in backend.selection, "comment": cue.comment})
+            self.cache.append({"sourceIndex": i, "number": i + 1, "startTime": format_time(cue.start), "endTime": format_time(cue.end), "character": cue.character, "cueText": plain_text(cue.output_text).replace("\n", "  ↵  "), "originalText": plain_text(cue.original).replace("\n", "  ↵  "), "translatedText": plain_text(cue.translation or "").replace("\n", "  ↵  "), "noteCount": backend.review_count(cue.id, "note"), "proposalCount": backend.review_count(cue.id, "proposal"), "cps": info["cps"], "warning": info["warning"], "issues": "\n".join(info["messages"]), "selected": i in backend.selection, "comment": cue.comment})
         self.endResetModel()
 
     def update_selection(self):
@@ -105,6 +110,12 @@ class Backend(QObject):
     focusEditor = Signal()
     spellingChanged = Signal()
     highlightWord = Signal(str)
+    cardsRequested = Signal(str)
+    reviewsRequested = Signal()
+    cropRequested = Signal()
+    captureChanged = Signal()
+    documentReplaced = Signal()
+    cardSaved = Signal(str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -113,12 +124,19 @@ class Backend(QObject):
         self.media_controller.error.connect(self.show_error)
         self.media_controller.metadataReady.connect(self._media_metadata)
         self.media_controller.positionChanged.connect(self.playbackChanged)
+        self.media_controller.captured.connect(self._frame_captured)
         data_dir = os.environ.get("SUBSTANCE_DATA_DIR") or QStandardPaths.writableLocation(QStandardPaths.StandardLocation.AppLocalDataLocation)
         self.data_dir = Path(data_dir)
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self.settings = QSettings(str(self.data_dir / "settings.ini"), QSettings.Format.IniFormat)
         self.recovery_path = self.data_dir / f"recovery-{os.getpid()}.substance"
         self.path = ""
+        self._card_id = ""
+        self._card_draft = {}
+        self._capture_image = QImage()
+        self._capture_meta = {}
+        self._capture_serial = 0
+        self._capture_request = None
         self._mode = "timing"
         self._current = -1
         self.selection: set[int] = set()
@@ -175,7 +193,7 @@ class Backend(QObject):
 
     @Property(bool, notify=changed)
     def dirty(self):
-        return self.editor.dirty or bool(self.draft)
+        return self.editor.dirty or bool(self.draft) or bool(self._card_draft)
 
     @Property(bool, notify=changed)
     def busy(self):
@@ -279,12 +297,12 @@ class Backend(QObject):
     @Property('QVariantMap', notify=changed)
     def current(self):
         if not 0 <= self._current < self.count:
-            return {"exists": False, "start": 0, "end": 2000, "startTime": "00:00:00.000", "endTime": "00:00:02.000", "original": "", "editText": "", "character": "", "status": "draft", "issues": [], "cps": 0, "comment": False}
+            return {"exists": False, "start": 0, "end": 2000, "startTime": "00:00:00.000", "endTime": "00:00:02.000", "original": "", "editText": "", "character": "", "characterId": "", "issues": [], "cps": 0, "comment": False}
         cue = self.editor.document.cues[self._current]
         info = self.cue_quality(self._current)
         text = (cue.translation or "") if self._mode == "translation" else cue.output_text
         text = self.draft.get("translation", self.draft.get("text", text))
-        return {"exists": True, "id": cue.id, "number": self._current + 1, "start": cue.start, "end": cue.end, "startTime": self.draft.get("start", format_time(cue.start)), "endTime": self.draft.get("end", format_time(cue.end)), "duration": (cue.end - cue.start) / 1000, "character": self.draft.get("character", cue.character), "original": cue.original.replace(r"\N", "\n"), "editText": text.replace(r"\N", "\n"), "status": cue.status, "comment": cue.comment, "issues": info["messages"], "cps": info["cps"], "maxLine": info["maxLine"]}
+        return {"exists": True, "id": cue.id, "number": self._current + 1, "start": cue.start, "end": cue.end, "startTime": self.draft.get("start", format_time(cue.start)), "endTime": self.draft.get("end", format_time(cue.end)), "duration": (cue.end - cue.start) / 1000, "character": self.draft.get("character", cue.character), "original": cue.original.replace(r"\N", "\n"), "editText": text.replace(r"\N", "\n"), "characterId": cue.character_id, "comment": cue.comment, "issues": info["messages"], "cps": info["cps"], "maxLine": info["maxLine"]}
 
     @Property(str, notify=preferencesChanged)
     def theme(self):
@@ -294,13 +312,13 @@ class Backend(QObject):
     def motion(self):
         return self._motion
 
-    @Property(int, notify=preferencesChanged)
+    @Property(int, notify=changed)
     def cpsLimit(self):
-        return self._cps_limit
+        return self.editor.document.review_settings.get("cpsLimit", self._cps_limit) if self.isProject else self._cps_limit
 
-    @Property(int, notify=preferencesChanged)
+    @Property(int, notify=changed)
     def lineLimit(self):
-        return self._line_limit
+        return self.editor.document.review_settings.get("lineLimit", self._line_limit) if self.isProject else self._line_limit
 
     @Property('QVariantMap', notify=preferencesChanged)
     def shortcuts(self):
@@ -393,12 +411,22 @@ class Backend(QObject):
         self.notify(f"Извлечено реплик: {self.count}")
 
     def _compute(self):
-        key = (id(self.editor.document), self.editor.revision, self._cps_limit, self._line_limit)
+        key = (id(self.editor.document), self.editor.revision, self.cpsLimit, self.lineLimit, self.isProject, tuple(sorted(self.editor.document.review_settings.items())))
         if key == self._computed_key:
             return
         cues = self.editor.document.cues
-        self._quality_cache = [quality(c, next_cue=cues[i + 1] if i + 1 < len(cues) else None, cps_limit=self._cps_limit, line_limit=self._line_limit) for i, c in enumerate(cues)]
-        self._counts_cache = {"all": len(cues), "missing": sum(c.translation in (None, "") for c in cues if not c.comment), "review": sum(c.status != "done" for c in cues), "done": sum(c.status == "done" for c in cues), "warnings": sum(q["warning"] for q in self._quality_cache)}
+        self._quality_cache = [quality(c, next_cue=cues[i + 1] if i + 1 < len(cues) else None, cps_limit=self.cpsLimit, line_limit=self.lineLimit, line_count_limit=self.reviewSettings["lineCountLimit"], show_length=self.reviewSettings["lineLength"], show_speed=self.reviewSettings["readingSpeed"], show_lines=self.reviewSettings["lineCount"]) for i, c in enumerate(cues)]
+        self._review_counts = {}
+        if self.isProject:
+            for entry in self.editor.document.reviews:
+                if entry.state == 'open':
+                    for cue_id in entry.cue_ids:
+                        review_key = (cue_id, entry.kind)
+                        self._review_counts[review_key] = self._review_counts.get(review_key, 0) + 1
+        self._counts_cache = {"all": len(cues), "warnings": sum(q["warning"] for q in self._quality_cache),
+                              "notes": sum(self._review_counts.get((c.id, 'note'), 0) > 0 for c in cues),
+                              "proposals": sum(self._review_counts.get((c.id, 'proposal'), 0) > 0 for c in cues),
+                              "characters": len(self.editor.document.characters) if self.isProject else 0}
         self._characters_cache = sorted({c.character for c in cues if c.character})
         self._computed_key = key
 
@@ -407,11 +435,9 @@ class Backend(QObject):
         return self._quality_cache[index]
 
     def matches(self, cue, info):
-        if self._filter == "missing" and cue.translation not in (None, ""):
+        if self._filter == 'notes' and not self.review_count(cue.id, 'note'):
             return False
-        if self._filter == "review" and cue.status == "done":
-            return False
-        if self._filter == "done" and cue.status != "done":
+        if self._filter == 'proposals' and not self.review_count(cue.id, 'proposal'):
             return False
         if self._filter == "warnings" and not info["warning"]:
             return False
@@ -441,7 +467,7 @@ class Backend(QObject):
                     self.media_controller.clear()
             self._refresh(current)
             return True
-        except (ValueError, IndexError, OSError, TypeError, re.error) as exc:
+        except (ValueError, IndexError, OSError, TypeError, KeyError, StopIteration, re.error) as exc:
             self.show_error(str(exc))
             return False
 
@@ -554,6 +580,11 @@ class Backend(QObject):
 
     @Slot(str)
     def setFilter(self, value):
+        if value == 'characters':
+            self.openCharacters('')
+            return
+        if value not in ('all', 'notes', 'proposals', 'warnings'):
+            return
         if self.flush():
             self._filter = value
             self._refresh()
@@ -627,26 +658,22 @@ class Backend(QObject):
 
     @Slot()
     def undo(self):
-        if self._guard(self.editor.undo):
+        if self.flushCard() and self._guard(self.editor.undo):
             self.notify("Правка отменена")
 
     @Slot()
     def redo(self):
-        if self._guard(self.editor.redo):
+        if self.flushCard() and self._guard(self.editor.redo):
             self.notify("Правка повторена")
 
     @Slot(bool)
     def apply(self, next_line=False):
         if not self.flush() or self._current < 0:
             return
-        if self._mode == "translation" and not self.editor.document.cues[self._current].translation:
-            self.show_error("Сначала введите перевод")
-            return
-        if self._guard(lambda: self.editor.update(self._current, status="done")):
-            if next_line:
-                self.navigate(1)
-            else:
-                self.notify("Реплика применена")
+        if next_line:
+            self.navigate(1)
+        else:
+            self.notify("Изменения применены")
 
     @Slot(int, int)
     def setRange(self, start, end):
@@ -711,6 +738,7 @@ class Backend(QObject):
         mime = QMimeData()
         payload = doc.to_dict()
         payload["cues"] = [asdict(c) for c in cues]
+        payload["reviews"] = []
         mime.setData("application/x-substance-cues", json.dumps(payload, ensure_ascii=False).encode())
         mime.setText("\n".join(c.ass_line() for c in cues))
         QGuiApplication.clipboard().setMimeData(mime)
@@ -728,6 +756,13 @@ class Backend(QObject):
             def edit(doc):
                 for c in incoming.cues:
                     c.id = identity("frag")
+                if self.isProject:
+                    existing = {c.id for c in doc.characters}
+                    doc.characters.extend(c for c in incoming.characters if c.id not in existing)
+                    doc.images.update(incoming.images)
+                else:
+                    for c in incoming.cues:
+                        c.character_id = ''
                 doc.source_lines.update(incoming.source_lines)
                 doc.cues[self._current + 1:self._current + 1] = incoming.cues
             self.editor.transact("Вставка реплик", edit)
@@ -781,6 +816,10 @@ class Backend(QObject):
 
     @Slot(str, str)
     def preference(self, name, value):
+        if name in ('cpsLimit', 'lineLimit') and self.isProject:
+            limit = max(1 if name == 'cpsLimit' else 10, min(100 if name == 'cpsLimit' else 200, int(value)))
+            self._guard(lambda: self.editor.transact('Настройки проверок', lambda d: d.review_settings.update({name: limit})))
+            return
         if name == "theme" and value in ("system", "light", "dark"):
             self._theme = value
             scheme = Qt.ColorScheme.Unknown if value == "system" else Qt.ColorScheme.Dark if value == "dark" else Qt.ColorScheme.Light
@@ -810,7 +849,7 @@ class Backend(QObject):
         self._guard(lambda: self.editor.transact("Настройки документа", apply))
 
     def _confirm_unsaved(self):
-        if not self.flush():
+        if not self.flushCard() or not self.flush():
             return False
         if not self.dirty:
             return True
@@ -826,8 +865,19 @@ class Backend(QObject):
             self.media_controller.clear()
 
     def _set_document(self, document, path):
+        self.documentReplaced.emit()
+        self._card_draft = {}
         self.editor = Editor(document)
         self.path = path
+        self.editor.project_mode = self.isProject
+        if self.isProject:
+            sync_characters(document)
+        self._card_id = ""
+        self._capture_request = None
+        self._capture_image = QImage()
+        self._capture_meta = {}
+        self._capture_serial += 1
+        self.captureChanged.emit()
         self.draft.clear()
         self._filter, self._search, self._pattern = "all", "", None
         self._character_filter = ""
@@ -877,7 +927,7 @@ class Backend(QObject):
 
     @Slot(result=bool)
     def save(self):
-        if not self.flush():
+        if not self.flushCard() or not self.flush():
             return False
         if not self.path:
             return self.saveAs()
@@ -893,27 +943,27 @@ class Backend(QObject):
 
     @Slot(result=bool)
     def saveAs(self):
-        if not self.flush():
+        if not self.flushCard() or not self.flush():
             return False
-        path, selected = QFileDialog.getSaveFileName(None, "Сохранить субтитры", self.path or "Новые субтитры.ass", "ASS (*.ass);;Проект Substance (*.substance)")
+        default = self.path or "Новый проект.substance"
+        path, selected = QFileDialog.getSaveFileName(None, "Сохранить как", default, "Проект Substance (*.substance);;ASS (*.ass)")
         if not path:
             return False
         if not Path(path).suffix:
             path += ".substance" if "Substance" in selected else ".ass"
-        try:
-            save_document(self.editor.document, path)
-            self.path = path
-            self.editor.mark_saved()
-            self._remove_recovery()
-            self.notify("Сохранено")
-            return True
-        except (ValueError, OSError) as exc:
-            self.show_error("Не удалось сохранить: " + str(exc))
-            return False
+        if self.isProject and Path(path).suffix.lower() != '.substance':
+            try:
+                export_document(self.editor.document, path)
+                self.notify('ASS экспортирован; работа продолжается в проекте')
+                return True
+            except (ValueError, OSError) as exc:
+                self.show_error(str(exc))
+                return False
+        return self._save_path(path)
 
     @Slot(bool)
     def exportDialog(self, originals=False):
-        if not self.flush():
+        if not self.flushCard() or not self.flush():
             return
         name = str(Path(self.path).with_suffix(".ass")) if self.path else "Субтитры.ass"
         path, selected = QFileDialog.getSaveFileName(None, "Экспорт оригинала" if originals else "Экспорт субтитров", name, "ASS (*.ass);;SubRip (*.srt);;WebVTT (*.vtt);;Текст (*.txt)")
@@ -994,6 +1044,7 @@ class Backend(QObject):
         data["recovery_path"] = self.path
         data["recovery_pid"] = os.getpid()
         data["recovery_draft"] = self.draft
+        data["recovery_card_draft"] = self._card_draft
         data["recovery_current"] = self._current
         data["recovery_mode"] = self._mode
         try:
@@ -1019,6 +1070,8 @@ class Backend(QObject):
                     self._current = min(max(0, data.get("recovery_current", 0)), self.count - 1)
                     self.selection = {self._current} if self._current >= 0 else set()
                     self.draft = data.get("recovery_draft", {})
+                    self._card_draft = data.get("recovery_card_draft", {})
+                    self._card_id = self._card_draft.get("id", "")
                     self._mode = data.get("recovery_mode", "timing")
                     if self._mode not in ("timing", "translation"):
                         self._mode = "timing"
@@ -1027,10 +1080,327 @@ class Backend(QObject):
                         self.media_controller.open(media_path)
                     self._refresh()
                     self.notify("Работа восстановлена; сохраните документ")
+                    if self._card_draft:
+                        self.cardsRequested.emit(self._card_id)
                 path.unlink(missing_ok=True)
                 break
             except (ValueError, OSError, TypeError, KeyError):
                 continue
+
+    @Property(bool, notify=changed)
+    def isProject(self):
+        return bool(self.path and Path(self.path).suffix.lower() == '.substance' and not self.path.lower().endswith(('.ass.substance', '.ssa.substance')))
+
+    @Property('QVariantMap', notify=changed)
+    def reviewSettings(self):
+        defaults = {'lineLength': True, 'readingSpeed': True, 'lineCount': True, 'lineCountLimit': 2}
+        return {**defaults, **self.editor.document.review_settings} if self.isProject else defaults
+
+    def review_count(self, cue_id, kind):
+        self._compute()
+        return self._review_counts.get((cue_id, kind), 0)
+
+    def _review_view(self, entry):
+        result = asdict(entry)
+        cues = [(i, c) for i, c in enumerate(self.editor.document.cues) if c.id in entry.cue_ids]
+        result.update(archived=not cues, numbers=[i+1 for i, c in cues], current=(getattr(cues[0][1], entry.field) or '') if len(cues) == 1 else '', cueId=cues[0][1].id if len(cues) == 1 else '')
+        field_changed = len(cues) == 1 and entry.field == 'text' and cues[0][1].translation is not None
+        result['currentField'] = 'translation' if field_changed else entry.field
+        if field_changed:
+            result['current'] = cues[0][1].translation
+        result['stale'] = entry.kind == 'proposal' and (entry.invalidated or field_changed or len(cues) != 1 or result['current'] != entry.base)
+        result['caption'] = ('Реплики ' + ', '.join(str(i+1) for i, c in cues)) if cues else 'Удалённая реплика'
+        chunks = []
+        for op, a, b, c, d in difflib.SequenceMatcher(None, entry.base, entry.replacement, autojunk=False).get_opcodes():
+            if op in ('replace', 'delete'):
+                chunks.append('<span style="color:#a53636"><s>' + html.escape(entry.base[a:b]) + '</s></span>')
+            if op in ('replace', 'insert'):
+                chunks.append('<span style="color:#237d46"><u>' + html.escape(entry.replacement[c:d]) + '</u></span>')
+            if op == 'equal':
+                chunks.append(html.escape(entry.base[a:b]))
+        result['diff'] = ''.join(chunks).replace(r'\N', '<br>').replace('\n', '<br>')
+        return result
+
+    @Property('QVariantList', notify=changed)
+    def cueChoices(self):
+        return [{'id': c.id, 'label': f'{i+1} · {c.character} · {plain_text(c.output_text)[:60]}', 'text': c.text.replace(r'\N', '\n'), 'translation': (c.translation or '').replace(r'\N', '\n')} for i, c in enumerate(self.editor.document.cues)]
+
+    @Property('QVariantList', notify=changed)
+    def reviewEntries(self):
+        return [self._review_view(r) for r in reversed(self.editor.document.reviews)] if self.isProject else []
+
+    @Property('QVariantList', notify=changed)
+    def currentReviews(self):
+        cue_id = self.current.get('id', '')
+        return [r for r in self.reviewEntries if cue_id in r['cue_ids']]
+
+    def _card_view(self, card):
+        result = asdict(card)
+        result['portraits'] = [{**p, 'url': 'image://project/' + p['image']} for p in card.portraits]
+        primary = next((p for p in card.portraits if p['id'] == card.primary), None)
+        result['portraitUrl'] = 'image://project/' + primary['image'] if primary else ''
+        result['cues'] = [{'id': c.id, 'number': i+1, 'time': format_time(c.start), 'text': plain_text(c.output_text)} for i, c in enumerate(self.editor.document.cues) if c.character_id == card.id]
+        return result
+
+    @Property('QVariantList', notify=changed)
+    def characterCards(self):
+        return [self._card_view(c) for c in self.editor.document.characters] if self.isProject else []
+
+    @Property(bool, notify=changed)
+    def hasCardDraft(self):
+        return bool(self._card_draft)
+
+    @Property('QVariantMap', notify=changed)
+    def currentCard(self):
+        card = next((self._card_view(c) for c in self.editor.document.characters if c.id == self._card_id), {'id': '', 'name': '', 'aliases': [], 'export_name': '', 'description': '', 'speech': '', 'notes': '', 'portraits': [], 'portraitUrl': '', 'cues': []})
+        return {**card, **self._card_draft} if self._card_draft and self._card_draft.get('id') == self._card_id else card
+
+    @Property(str, notify=changed)
+    def currentPortraitUrl(self):
+        card = next((c for c in self.editor.document.characters if c.id == self.current.get('characterId', '')), None)
+        return self._card_view(card)['portraitUrl'] if card and self.isProject else ''
+
+    @Property('QVariantMap', notify=captureChanged)
+    def captureInfo(self):
+        return {**self._capture_meta, 'url': ('image://project/capture?' + str(self._capture_serial)) if not self._capture_image.isNull() else '', 'width': self._capture_image.width(), 'height': self._capture_image.height()}
+
+    def _save_path(self, path):
+        try:
+            if str(path).lower().endswith(('.ass.substance', '.ssa.substance')):
+                raise ValueError('Для самостоятельного проекта выберите имя без .ass.substance или .ssa.substance')
+            if Path(path).suffix.lower() == '.substance':
+                self.editor.transact('Подготовка проекта', sync_characters)
+            save_document(self.editor.document, path)
+            self.path = path
+            self.editor.project_mode = self.isProject
+            self.editor.mark_saved()
+            self._remove_recovery()
+            self._refresh()
+            self.notify('Сохранено')
+            return True
+        except (ValueError, OSError) as exc:
+            self.show_error('Не удалось сохранить: ' + str(exc))
+            return False
+
+    @Slot(result=bool)
+    def ensureProject(self):
+        if self.isProject:
+            return self.flush()
+        if not self.flush():
+            return False
+        suggested = Path(self.path) if self.path else Path('Новый проект.substance')
+        if str(suggested).lower().endswith(('.ass.substance', '.ssa.substance')):
+            suggested = suggested.with_suffix('')
+        path, _ = QFileDialog.getSaveFileName(None, 'Сохранить проект для заметок и персонажей', str(suggested.with_suffix('.substance')), 'Проект Substance (*.substance)')
+        if not path:
+            return False
+        if Path(path).suffix.lower() != '.substance':
+            path += '.substance'
+        return self._save_path(path)
+
+    @Slot(str, bool)
+    def setReviewSetting(self, name, value):
+        if name in ('lineLength', 'readingSpeed', 'lineCount') and self.ensureProject():
+            self._guard(lambda: self.editor.transact('Настройки проверок', lambda d: d.review_settings.update({name: value})))
+
+    @Slot()
+    def openReviews(self):
+        if self.ensureProject():
+            self.reviewsRequested.emit()
+
+    @Slot(str)
+    def openCharacters(self, card_id=''):
+        if self.ensureProject() and self.flushCard():
+            self._card_id = card_id or self.current.get('characterId', '')
+            self.changed.emit()
+            self.cardsRequested.emit(self._card_id)
+
+    @Slot(str)
+    def selectCard(self, card_id):
+        if self._card_draft and card_id != self._card_id and not self.flushCard():
+            return
+        self._card_id = card_id
+        self.changed.emit()
+
+    @Slot(str, str, str, result=bool)
+    def addReview(self, kind, text, replacement):
+        if kind not in ('note', 'proposal') or not self.ensureProject() or self._current < 0:
+            return False
+        cue = self.editor.document.cues[self._current]
+        target = 'translation' if self._mode == 'translation' or cue.translation is not None else 'text'
+        return self._guard(lambda: self.editor.add_review(cue.id, text, replacement=replacement.replace('\n', r'\N') if kind == 'proposal' else None, target=target))
+
+    @Slot(str, str, result=bool)
+    def editNote(self, entry_id, text):
+        return self.isProject and self._guard(lambda: self.editor.edit_note(entry_id, text))
+
+    @Slot(str, str)
+    def reviewAction(self, entry_id, action):
+        if not self.isProject:
+            return
+        def edit():
+            if action == 'apply':
+                self.editor.apply_proposal(entry_id)
+            elif action == 'delete':
+                self.editor.delete_note(entry_id)
+            else:
+                self.editor.review_state(entry_id, action)
+        self._guard(edit)
+
+    @Slot(str, str, str, str, result=bool)
+    def rebaseProposal(self, entry_id, cue_id, replacement, text):
+        return self.isProject and self._guard(lambda: self.editor.rebase_proposal(entry_id, cue_id, replacement.replace('\n', r'\N'), text))
+
+    @Slot(str)
+    def selectCueId(self, cue_id):
+        index = next((i for i, c in enumerate(self.editor.document.cues) if c.id == cue_id), -1)
+        if index >= 0 and self.flush():
+            self._filter, self._character_filter, self._search, self._pattern = 'all', '', '', None
+            self._refresh()
+            if self.select(index, 0):
+                self.seekCurrent()
+
+    @Slot(str, str, str, str, str, str, str, result=bool)
+    def saveCharacter(self, card_id, name, aliases, export_name, description, speech, notes):
+        if not self.ensureProject():
+            return False
+        def edit():
+            self._card_id = self.editor.save_character(card_id, name, aliases.split(','), export_name, description, speech, notes)
+            self._card_draft = {}
+        ok = self._guard(edit)
+        if ok:
+            self.cardSaved.emit(self._card_id)
+        return ok
+
+    @Slot(str, str, str, str, str, str, str)
+    def stageCard(self, card_id, name, aliases, export_name, description, speech, notes):
+        if self.isProject:
+            self._card_draft = {'id': card_id, 'name': name, 'aliases': aliases.split(','), 'export_name': export_name, 'description': description, 'speech': speech, 'notes': notes}
+            self.changed.emit()
+
+    @Slot(result=bool)
+    def flushCard(self):
+        if not self._card_draft:
+            return True
+        d = self._card_draft
+        return self.saveCharacter(d['id'], d['name'], ','.join(d['aliases']), d['export_name'], d['description'], d['speech'], d['notes'])
+
+    @Slot()
+    def discardCardDraft(self):
+        self._card_draft = {}
+        self.changed.emit()
+
+    @Slot(str)
+    def assignCharacter(self, card_id):
+        if self.isProject:
+            self._guard(lambda: self.editor.assign_character(self._indices(), card_id))
+
+    @Slot(str)
+    def deleteCharacter(self, card_id):
+        if self.isProject and self._guard(lambda: self.editor.delete_character(card_id)):
+            self._card_id = ''
+            self.changed.emit()
+
+    @Slot(str)
+    def capturePortrait(self, card_id):
+        if self.ensureProject():
+            self._capture_request = (id(self.editor), self.path, card_id)
+            self.media_controller.captureFrame()
+
+    def _frame_captured(self, image, time, path):
+        request = self._capture_request
+        self._capture_request = None
+        if request is None or request[:2] != (id(self.editor), self.path) or not self.isProject:
+            return
+        self._begin_crop(image, {'cardId': request[2], 'media_path': path, 'time': time, 'portraitId': '', 'crop': [0, 0, 1, 1]})
+
+    def _begin_crop(self, image, meta):
+        self._capture_image = image
+        self._capture_meta = meta
+        self._capture_serial += 1
+        self.captureChanged.emit()
+        self.cropRequested.emit()
+
+    @Slot(str)
+    def importPortrait(self, card_id):
+        if not self.ensureProject():
+            return
+        path, _ = QFileDialog.getOpenFileName(None, 'Изображение персонажа', '', 'Изображения (*.png *.jpg *.jpeg *.webp *.bmp)')
+        if path:
+            try:
+                self._begin_crop(load_image(path), {'cardId': card_id, 'media_path': '', 'time': 0, 'portraitId': '', 'crop': [0, 0, 1, 1]})
+            except ValueError as exc:
+                self.show_error(str(exc))
+
+    @Slot(str, str)
+    def recropPortrait(self, card_id, portrait_id):
+        if not self.isProject:
+            return
+        card = next((c for c in self.editor.document.characters if c.id == card_id), None)
+        portrait = next((p for p in card.portraits if p['id'] == portrait_id), None) if card else None
+        if portrait:
+            self._begin_crop(decode_image(self.editor.document.images[portrait['source']]), {**portrait, 'cardId': card_id, 'portraitId': portrait_id, 'primary': card.primary == portrait_id})
+
+    @Slot(str, str, float, float, float, float, bool, result=bool)
+    def savePortrait(self, card_id, new_name, x, y, width, height, primary):
+        if not self.isProject or self._capture_image.isNull() or not self.flush():
+            return False
+        try:
+            crop = [x, y, width, height]
+            cropped = crop_image(self._capture_image, crop)
+            source_key = self._capture_meta.get('source', '')
+            if source_key in self.editor.document.images:
+                source_data = self.editor.document.images[source_key]
+            else:
+                source_key, source_data = encode_image(self._capture_image, source=True)
+            image_key, image_data = encode_image(cropped)
+            portrait = {'id': self._capture_meta.get('portraitId') or identity('portrait'), 'source': source_key, 'image': image_key, 'crop': crop, 'media_path': self._capture_meta.get('media_path', ''), 'time': self._capture_meta.get('time', 0), 'make_primary': primary}
+            # Character creation and its first portrait form one undoable operation.
+            def edit(doc):
+                from .project import CharacterCard
+                nonlocal card_id
+                if not card_id:
+                    if not new_name.strip() or any(c.name == new_name.strip() for c in doc.characters):
+                        raise ValueError('Введите новое уникальное имя персонажа')
+                    card_id = identity('char')
+                    doc.characters.append(CharacterCard(card_id, new_name.strip(), export_name=new_name.strip()))
+                card = next(c for c in doc.characters if c.id == card_id)
+                old = next((i for i, p in enumerate(card.portraits) if p['id'] == portrait['id']), None)
+                if old is None:
+                    card.portraits.append(portrait)
+                else:
+                    card.portraits[old] = portrait
+                doc.images.update({source_key: source_data, image_key: image_data})
+                if primary or not card.primary:
+                    card.primary = portrait['id']
+                self.editor._prune_images(doc)
+            if self._guard(lambda: self.editor.transact('Сохранение портрета', edit)):
+                self._card_id = card_id
+                self.changed.emit()
+                self.cardsRequested.emit(card_id)
+                return True
+        except (ValueError, OSError) as exc:
+            self.show_error(str(exc))
+        return False
+
+    @Slot(str, str, str)
+    def portraitAction(self, card_id, portrait_id, action):
+        if self.isProject:
+            self._guard(lambda: self.editor.portrait_action(card_id, portrait_id, action))
+
+    @Slot(str, str)
+    def seekPortrait(self, card_id, portrait_id):
+        card = next((c for c in self.editor.document.characters if c.id == card_id), None)
+        portrait = next((p for p in card.portraits if p['id'] == portrait_id), None) if card else None
+        if portrait and portrait.get('media_path'):
+            if not Path(portrait['media_path']).is_file():
+                self.show_error('Исходное видео недоступно. Изображение сохранено в проекте.')
+                return
+            if self.media_controller.path != portrait['media_path']:
+                self.openMediaPath(portrait['media_path'])
+                self.media_controller.seekOnLoad(portrait['time'])
+            else:
+                self.media_controller.seek(portrait['time'])
 
     def shutdown(self):
         for name in ("_spelling_task", "_extract_task"):

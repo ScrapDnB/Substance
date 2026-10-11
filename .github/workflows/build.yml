@@ -54,7 +54,7 @@ jobs:
         run: python scripts/build.py
       - uses: actions/upload-artifact@v4
         with:
-          name: Substance-0.1.0-alpha.4-${{ runner.os }}
+          name: Substance-0.1.0-alpha.5-${{ runner.os }}
           path: |
             dist/Substance.app
             dist/Substance

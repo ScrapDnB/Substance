@@ -13,7 +13,7 @@ import sys
 
 import numpy as np
 from PySide6.QtCore import QObject, Property, QThread, QTimer, QUrl, Signal, Slot
-from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer, QVideoSink
+from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer, QVideoSink, QVideoFrame
 
 
 def ffmpeg_executable() -> str:
@@ -45,6 +45,7 @@ class AudioAnalysis(QObject):
         self.path, self.duration, self.track = path, duration, track
         self.cancelled = threading.Event()
         self.process = None
+        self.audio_available = None
 
     def cancel(self):
         self.cancelled.set()
@@ -64,7 +65,9 @@ class AudioAnalysis(QObject):
             if self.cancelled.is_set():
                 return
             data = json.loads(out)
-            video = next((s for s in data.get("streams", []) if s.get("codec_type") == "video"), {})
+            streams = data.get("streams", [])
+            self.audio_available = any(s.get("codec_type") == "audio" for s in streams)
+            video = next((s for s in streams if s.get("codec_type") == "video"), {})
             num, den = video.get("avg_frame_rate", "0/1").split("/")
             fps = float(num) / float(den) if float(den) else 0
             self.duration = round(float(data.get("format", {}).get("duration", 0)) * 1000) or self.duration
@@ -78,6 +81,9 @@ class AudioAnalysis(QObject):
         try:
             self._probe()
             if self.cancelled.is_set():
+                return
+            if self.audio_available is False:
+                self.completed.emit(np.empty(0, dtype=np.float32), np.empty((0, 64), dtype=np.uint8), [])
                 return
             fft_window = np.hanning(256).astype(np.float32)
             peaks = []
@@ -112,7 +118,11 @@ class AudioAnalysis(QObject):
                 status = self.process.wait(timeout=10)
                 if status:
                     error_log.seek(0)
-                    raise ValueError(error_log.read(4000).decode(errors="replace").strip() or "В файле нет выбранной аудиодорожки")
+                    error = error_log.read(4000).decode(errors="replace").strip()
+                    if self.track == 0 and "matches no streams" in error:
+                        self.completed.emit(np.empty(0, dtype=np.float32), np.empty((0, 64), dtype=np.uint8), [])
+                        return
+                    raise ValueError(error or "В файле нет выбранной аудиодорожки")
             self.completed.emit(np.asarray(peaks, dtype=np.float32), np.frombuffer(bytes(spectrum), dtype=np.uint8).reshape(-1, 64), [])
         except Exception as exc:
             if not self.cancelled.is_set():
@@ -179,6 +189,7 @@ class MediaController(QObject):
     analysisChanged = Signal()
     metadataReady = Signal(dict)
     error = Signal(str)
+    captured = Signal(object, int, str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -190,6 +201,7 @@ class MediaController(QObject):
         self.player.durationChanged.connect(self.changed)
         self.player.playbackStateChanged.connect(self.changed)
         self.player.tracksChanged.connect(self.changed)
+        self.player.hasVideoChanged.connect(self.changed)
         self.player.mediaStatusChanged.connect(self._media_status)
         self.player.errorOccurred.connect(lambda code, message: self.error.emit(message))
         self.path = ""
@@ -208,6 +220,16 @@ class MediaController(QObject):
         self._sink = None
         self._frame_position = 0
         self._video_width, self._video_height = 1920, 1080
+        self._seek_pending = None
+        self._last_frame = QVideoFrame()
+        self._initial_seek = None
+        self._capture_pending = False
+        self._capture_timer = QTimer(self, singleShot=True, interval=3000)
+        self._capture_timer.timeout.connect(self._capture_timeout)
+
+    @Property(bool, notify=changed)
+    def hasVideo(self):
+        return self.player.hasVideo()
 
     @Property(int, notify=positionChanged)
     def position(self):
@@ -281,9 +303,14 @@ class MediaController(QObject):
             self._sink = sink
             sink.videoFrameChanged.connect(self._first_frame)
             self.player.setVideoSink(sink)
+            if self._last_frame.isValid():
+                sink.setVideoFrame(self._last_frame)
 
     def _media_status(self, status):
         if status == QMediaPlayer.MediaStatus.LoadedMedia and self._priming:
+            if self._initial_seek is not None:
+                self.seek(self._initial_seek)
+                self._initial_seek = None
             if self.player.hasVideo():
                 self.player.play()
             else:
@@ -291,13 +318,20 @@ class MediaController(QObject):
 
     def _first_frame(self, frame):
         if frame.isValid():
+            self._last_frame = QVideoFrame(frame)
             self._frame_position = round(max(0, frame.startTime()) / 1000)
             size = frame.size()
             if (size.width(), size.height()) != (self._video_width, self._video_height):
                 self._video_width, self._video_height = size.width(), size.height()
                 self.changed.emit()
             self.positionChanged.emit()
-        if self._priming and frame.isValid():
+            if self._seek_pending is not None:
+                end = frame.endTime() / 1000
+                if abs(self._frame_position - self._seek_pending) <= 100 or self._frame_position <= self._seek_pending < end:
+                    self._seek_pending = None
+            if self._capture_pending and self._seek_pending is None:
+                self._deliver_capture(frame)
+        if self._priming and frame.isValid() and self._seek_pending is None:
             self._priming = False
             self.player.pause()
 
@@ -313,7 +347,35 @@ class MediaController(QObject):
     @Slot(int)
     def seek(self, value):
         self._stop_at = -1
-        self.player.setPosition(max(0, value))
+        value = max(0, value)
+        if value != self.player.position():
+            self._seek_pending = value
+            self.player.setPosition(value)
+
+    @Slot()
+    def captureFrame(self):
+        self.player.pause()
+        if not self.player.hasVideo() or self._sink is None:
+            self.error.emit('Откройте видео для захвата портрета')
+            return
+        self._capture_pending = True
+        self._capture_timer.start()
+        frame = self._sink.videoFrame()
+        if self._seek_pending is None and frame.isValid():
+            self._deliver_capture(frame)
+
+    def _deliver_capture(self, frame):
+        from .images import frame_image
+        self._capture_pending = False
+        self._capture_timer.stop()
+        try:
+            self.captured.emit(frame_image(frame), max(0, round(frame.startTime() / 1000)), self.path)
+        except ValueError as exc:
+            self.error.emit(str(exc))
+
+    def _capture_timeout(self):
+        self._capture_pending = False
+        self.error.emit('Кадр ещё не готов. Дождитесь обновления видео и повторите захват.')
 
     @Slot()
     def toggle(self):
@@ -347,6 +409,11 @@ class MediaController(QObject):
 
     def open(self, path):
         self.cancel_analysis()
+        self._seek_pending = None
+        self._last_frame = QVideoFrame()
+        self._initial_seek = None
+        self._capture_pending = False
+        self._capture_timer.stop()
         self._generation += 1
         self.player.stop()
         self.path = str(path)
@@ -364,8 +431,19 @@ class MediaController(QObject):
             worker.generation = self._generation
             self._start_worker(worker, lambda w: w.completed.connect(self._keyframes))
 
+    def seekOnLoad(self, position):
+        if self.player.mediaStatus() in (QMediaPlayer.MediaStatus.LoadedMedia, QMediaPlayer.MediaStatus.BufferedMedia):
+            self.seek(position)
+        else:
+            self._initial_seek = position
+
     def clear(self):
         self.cancel_analysis()
+        self._seek_pending = None
+        self._last_frame = QVideoFrame()
+        self._initial_seek = None
+        self._capture_pending = False
+        self._capture_timer.stop()
         self._generation += 1
         self._audio_generation += 1
         self.player.stop()

@@ -142,7 +142,7 @@ def test_qml_typing_keyboard_navigation_and_modes(app, backend):
         QTest.qWait(100)
         assert backend.currentIndex == 1
         assert backend.editor.document.cues[0].translation == 'Привет, мир!'
-        assert backend.editor.document.cues[0].status == 'done'
+        assert 'status' not in backend.current
         backend.setMode('timing')
         backend.select(0, 0)
         QTest.qWait(100)

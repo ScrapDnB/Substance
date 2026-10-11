@@ -7,7 +7,7 @@ Dialog {
     required property var colors
     title: "Настройки Substance"
     width: 690
-    height: 570
+    height: 650
     modal: true
     standardButtons: Dialog.Close
     anchors.centerIn: Overlay.overlay
@@ -58,7 +58,12 @@ Dialog {
                 }
                 Button { text: "Применить к документу"; onClicked: backend.documentSettings(Number(fps.text), ["utf-8", "cp1251", "utf-16"][encoding.currentIndex]) }
                 Label { text: "Точное время хранится в миллисекундах. ASS экспортируется с округлением до сотых секунды. Исходные стили и теги сохраняются."; wrapMode: Text.Wrap; Layout.fillWidth: true; color: dialog.colors.muted }
-                Label { text: "Файл .ass.substance рядом с ASS сохраняет оригинал, перевод, статусы и связи исходных строк. Для переноса всего проекта можно сохранить .substance."; wrapMode: Text.Wrap; Layout.fillWidth: true; color: dialog.colors.muted }
+                Label { text: "Файл .ass.substance рядом с ASS сохраняет оригинал, перевод и связи исходных строк. Для переноса всего проекта можно сохранить .substance."; wrapMode: Text.Wrap; Layout.fillWidth: true; color: dialog.colors.muted }
+                Label { text: "Проверки проекта"; font.bold: true }
+                Label { visible: !backend.isProject; text: "Сохраните .substance для отдельных настроек проверок."; color: dialog.colors.muted; Layout.fillWidth: true; wrapMode: Text.Wrap }
+                CheckBox { objectName: "showLengthWarnings"; text: "Превышение длины строки"; enabled: backend.isProject; checked: backend.reviewSettings.lineLength; onClicked: backend.setReviewSetting("lineLength", checked) }
+                CheckBox { text: "Превышение скорости чтения"; enabled: backend.isProject; checked: backend.reviewSettings.readingSpeed; onClicked: backend.setReviewSetting("readingSpeed", checked) }
+                CheckBox { text: "Превышение количества строк"; enabled: backend.isProject; checked: backend.reviewSettings.lineCount; onClicked: backend.setReviewSetting("lineCount", checked) }
                 Item { Layout.fillHeight: true }
             }
             ColumnLayout {
@@ -69,7 +74,7 @@ Dialog {
                     ScrollBar.vertical: ScrollBar { }
                     model: [
                         {key:"new", name:"Новый документ"}, {key:"open", name:"Открыть"}, {key:"save", name:"Сохранить"}, {key:"saveAs", name:"Сохранить как"}, {key:"export", name:"Экспорт"},
-                        {key:"undo", name:"Отмена"}, {key:"redo", name:"Повтор"}, {key:"find", name:"Поиск"}, {key:"replace", name:"Замена"}, {key:"apply", name:"Применить / готово и дальше"},
+                        {key:"undo", name:"Отмена"}, {key:"redo", name:"Повтор"}, {key:"find", name:"Поиск"}, {key:"replace", name:"Замена"}, {key:"apply", name:"Применить / следующая реплика"},
                         {key:"newLine", name:"Новая реплика"}, {key:"duplicate", name:"Дублировать"}, {key:"split", name:"Разделить"}, {key:"merge", name:"Объединить"},
                         {key:"previous", name:"Предыдущая реплика"}, {key:"next", name:"Следующая реплика"}, {key:"play", name:"Воспроизведение"}, {key:"playLine", name:"Воспроизвести реплику"},
                         {key:"setStart", name:"Начало по текущему кадру"}, {key:"setEnd", name:"Конец по текущему кадру"}, {key:"frameBack", name:"Предыдущий кадр"}, {key:"frameForward", name:"Следующий кадр"},

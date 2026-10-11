@@ -50,6 +50,11 @@ Pane {
                     textFormat: Text.PlainText
                 }
             }
+            Button {
+                anchors.top: parent.top; anchors.right: parent.right; anchors.margins: 8
+                text: "Портрет"; visible: backend.media.hasVideo
+                onClicked: backend.capturePortrait(backend.current.characterId || "")
+            }
             Column {
                 anchors.centerIn: parent
                 spacing: 12
@@ -81,7 +86,7 @@ Pane {
             ControlButton { symbol: "frame-back"; enabled: backend.media.hasMedia; onClicked: backend.stepFrame(-1); hint: "Предыдущий кадр" }
             ControlButton { objectName: "playButton"; symbol: backend.media.playing ? "pause" : "play"; enabled: backend.media.hasMedia; onClicked: backend.media.toggle(); hint: backend.media.playing ? "Пауза" : "Воспроизведение" }
             ControlButton { symbol: "frame-forward"; enabled: backend.media.hasMedia; onClicked: backend.stepFrame(1); hint: "Следующий кадр" }
-            Label { text: pane.time(backend.media.position) + " / " + pane.time(backend.media.duration); color: pane.colors.muted; font.pixelSize: 10; Layout.fillWidth: true }
+            Label { text: pane.time(backend.media.position) + " / " + pane.time(backend.media.duration); color: pane.colors.muted; font.pixelSize: 10; Layout.fillWidth: true; Layout.minimumWidth: 0; elide: Text.ElideRight }
             ComboBox { model: ["0.5×", "0.75×", "1×", "1.25×", "1.5×", "2×"]; currentIndex: 2; implicitWidth: 76; onActivated: backend.media.setRate([0.5, 0.75, 1, 1.25, 1.5, 2][currentIndex]); Accessible.name: "Скорость воспроизведения" }
             CompactSlider { objectName: "volumeSlider"; visible: pane.width > 540; Layout.preferredWidth: 84; value: backend.media.volume; onMoved: backend.media.setVolume(value); Accessible.name: "Громкость" }
         }

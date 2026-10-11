@@ -81,7 +81,7 @@ coll = COLLECT(exe, a.binaries, a.datas, strip=False, upx=False, name="Substance
 if sys.platform == "darwin":
     app = BUNDLE(coll, name="Substance.app", icon=icon, bundle_identifier="dev.scrapdnb.substance",
         info_plist={
-            "CFBundleShortVersionString": "0.1.0", "CFBundleVersion": "4", "SubstanceVersion": "0.1.0-alpha.4",
+            "CFBundleShortVersionString": "0.1.0", "CFBundleVersion": "5", "SubstanceVersion": "0.1.0-alpha.5",
             "NSHighResolutionCapable": True, "LSMinimumSystemVersion": "15.0", "NSHumanReadableCopyright": "Substance · ScrapDnB",
             "CFBundleDocumentTypes": [
                 {"CFBundleTypeName": "ASS Subtitle", "CFBundleTypeExtensions": ["ass", "ssa", "srt", "vtt"], "CFBundleTypeRole": "Editor", "LSHandlerRank": "Alternate"},

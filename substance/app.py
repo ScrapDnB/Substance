@@ -62,6 +62,8 @@ def main():
     scheme = Qt.ColorScheme.Dark if backend.theme == "dark" else Qt.ColorScheme.Light if backend.theme == "light" else Qt.ColorScheme.Unknown
     app.styleHints().setColorScheme(scheme)
     engine = QQmlApplicationEngine()
+    from .images import ProjectImageProvider
+    engine.addImageProvider("project", ProjectImageProvider(backend))
     engine.rootContext().setContextProperty("backend", backend)
     engine.setInitialProperties({"macOSIntegration": chrome, "startupChromeReady": False})
     engine.load(QUrl.fromLocalFile(str(Path(__file__).parent / "qml" / "Main.qml")))

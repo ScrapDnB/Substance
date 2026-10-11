@@ -13,8 +13,9 @@ import tempfile
 
 from .timecode import parse_time, format_time
 from . import __version__
+from .project import ReviewEntry, CharacterCard, record_from_dict, validate_project
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 ASS_FIELDS = ["Layer", "Start", "End", "Style", "Name", "MarginL", "MarginR", "MarginV", "Effect", "Text"]
 DEFAULT_ASS = """[Script Info]
 Title: Substance
@@ -62,7 +63,7 @@ class Cue:
     original: str = ""
     translation: str | None = None
     character: str = ""
-    status: str = "draft"
+    character_id: str = ""
     comment: bool = False
     field_order: list[str] = field(default_factory=lambda: list(ASS_FIELDS))
     ass_fields: dict[str, str] = field(default_factory=dict)
@@ -106,6 +107,10 @@ class Document:
     fps: float = 23.976
     warnings: list[str] = field(default_factory=list)
     extras: dict = field(default_factory=dict)
+    reviews: list[ReviewEntry] = field(default_factory=list)
+    characters: list[CharacterCard] = field(default_factory=list)
+    images: dict[str, str] = field(default_factory=dict)
+    review_settings: dict = field(default_factory=dict)
 
     def register_source(self, cue: Cue) -> None:
         if not cue.source_ids:
@@ -121,12 +126,11 @@ class Document:
         for c in self.cues:
             if isinstance(c.start, bool) or isinstance(c.end, bool) or not isinstance(c.start, int) or not isinstance(c.end, int) or c.start < 0 or c.end < c.start:
                 raise ValueError("Конец реплики не может быть раньше начала")
-            if c.status not in ("draft", "review", "done"):
-                raise ValueError("Неизвестный статус реплики")
             if not isinstance(c.text, str) or not isinstance(c.original, str) or (c.translation is not None and not isinstance(c.translation, str)):
                 raise ValueError("Некорректный текст реплики")
             if any(s not in self.source_lines for s in c.source_ids):
                 raise ValueError("Реплика ссылается на отсутствующую исходную строку")
+        validate_project(self)
 
     def ass_text(self) -> str:
         result: list[str | Cue] = []
@@ -177,26 +181,31 @@ class Document:
         except UnicodeEncodeError as exc:
             raise ValueError("Новые символы нельзя сохранить в исходной кодировке. Выберите UTF-8 в настройках документа.") from exc
 
-    def to_dict(self) -> dict:
+    def to_dict(self, *, project_data=True) -> dict:
         result = deepcopy(self.extras)
         result.update({"format": "substance", "schema_version": SCHEMA_VERSION, "app_version": __version__, "cues": [asdict(c) for c in self.cues], "skeleton": self.skeleton, "newline": self.newline, "trailing_newline": self.trailing_newline, "encoding": self.encoding, "bom": self.bom, "source_lines": deepcopy(self.source_lines), "metadata": deepcopy(self.metadata), "media": deepcopy(self.media), "fps": self.fps, "warnings": list(self.warnings)})
+        if project_data:
+            result.update(reviews=[asdict(r) for r in self.reviews], characters=[asdict(c) for c in self.characters], images=dict(self.images), review_settings=deepcopy(self.review_settings))
+        else:
+            for cue in result['cues']:
+                cue['character_id'] = ''
         return result
 
     @classmethod
     def from_dict(cls, data: dict) -> Document:
         if not isinstance(data, dict) or data.get("format") != "substance":
             raise ValueError("Это не проект Substance. Проекты Dubbing Manager пока не открываются.")
-        if data.get("schema_version") != SCHEMA_VERSION:
+        if data.get("schema_version") not in (1, SCHEMA_VERSION):
             raise ValueError("Неподдерживаемая версия формата проекта")
-        known = {f.name for f in fields(cls)} - {"cues", "extras"}
+        known = {f.name for f in fields(cls)} - {"cues", "extras", "reviews", "characters"}
         cue_known = {f.name for f in fields(Cue)} - {"extras"}
         cues = []
         for item in data["cues"]:
             extra = dict(item.get("extras", {}))
             extra.update({k: v for k, v in item.items() if k not in cue_known and k != "extras"})
             cues.append(Cue(**{k: v for k, v in item.items() if k in cue_known}, extras=extra))
-        consumed = known | {"cues", "format", "schema_version", "app_version"}
-        doc = cls(cues=cues, **{k: deepcopy(v) for k, v in data.items() if k in known}, extras={k: deepcopy(v) for k, v in data.items() if k not in consumed})
+        consumed = known | {"cues", "reviews", "characters", "format", "schema_version", "app_version"}
+        doc = cls(cues=cues, reviews=[record_from_dict(ReviewEntry, r) for r in data.get('reviews', [])], characters=[record_from_dict(CharacterCard, c) for c in data.get('characters', [])], **{k: deepcopy(v) for k, v in data.items() if k in known}, extras={k: deepcopy(v) for k, v in data.items() if k not in consumed})
         doc.validate()
         return doc
 
@@ -353,10 +362,13 @@ def save_document(doc: Document, path: str | Path) -> None:
     doc.validate()
     path = Path(path)
     if path.suffix.lower() == ".substance":
-        atomic_write(path, json.dumps(doc.to_dict(), ensure_ascii=False, indent=2).encode("utf-8"))
+        data = json.dumps(doc.to_dict(), ensure_ascii=False, indent=2).encode("utf-8")
+        if len(data) > 100 * 1024 * 1024:
+            raise ValueError("Проект больше 100 МБ. Удалите ненужные изображения.")
+        atomic_write(path, data)
     else:
         data = doc.ass_bytes()
-        sidecar = doc.to_dict()
+        sidecar = doc.to_dict(project_data=False)
         sidecar["ass_sha256"] = hashlib.sha256(data).hexdigest()
         # Sidecar first: a failed ASS write cannot make a mismatching translation load.
         atomic_write(path.with_name(path.name + ".substance"), json.dumps(sidecar, ensure_ascii=False, indent=2).encode("utf-8"))
@@ -365,8 +377,12 @@ def save_document(doc: Document, path: str | Path) -> None:
 
 def export_document(doc: Document, path: str | Path, *, originals: bool = False) -> None:
     path = Path(path)
+    doc = deepcopy(doc)
+    cards = {c.id: c for c in doc.characters}
+    for cue in doc.cues:
+        if cue.character_id in cards:
+            cue.character = cards[cue.character_id].export_name or cards[cue.character_id].name
     if originals:
-        doc = deepcopy(doc)
         for cue in doc.cues:
             cue.text, cue.translation = cue.original, None
     suffix = path.suffix.lower()

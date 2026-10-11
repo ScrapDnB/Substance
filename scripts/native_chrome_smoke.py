@@ -48,6 +48,8 @@ def main():
     backend._set_document(load_document(root / 'substance/resources/example.ass'), '')
     chrome = MacOSIntegration(backend, app)
     engine = QQmlApplicationEngine()
+    from substance.images import ProjectImageProvider
+    engine.addImageProvider("project", ProjectImageProvider(backend))
     engine.rootContext().setContextProperty('backend', backend)
     engine.setInitialProperties({'macOSIntegration': chrome, 'startupChromeReady': False})
     window = None
@@ -109,7 +111,7 @@ def main():
                     pending.extend(element.accessibilityAttributeValue_('AXChildren') or [])
             check(native_accessible, 'Native navigation is reachable in the window accessibility tree')
             host.outline.selectRowIndexes_byExtendingSelection_(NSIndexSet.indexSetWithIndex_(1), False)
-            check(backend.activeFilter == 'missing', 'Native sidebar filter reaches the backend')
+            check(backend.activeFilter == 'warnings', 'Native sidebar filter reaches the backend')
             backend.setFilter('all')
             check(host.outline.selectedRow() == 0, 'Native navigation follows programmatic filter changes')
             host.character.selectItemAtIndex_(1)

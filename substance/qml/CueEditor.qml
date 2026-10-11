@@ -9,6 +9,7 @@ Pane {
     property bool loading: true
     property int cursorPosition: editTextArea.cursorPosition
     signal editorCursorChanged(int position)
+    signal composeRequested(string kind)
     padding: 16
     background: Rectangle { color: panel.colors.surface }
 
@@ -40,8 +41,9 @@ Pane {
         spacing: 10
         RowLayout {
             Layout.fillWidth: true
+            Image { source: backend.currentPortraitUrl; Layout.preferredWidth: 28; Layout.preferredHeight: 32; fillMode: Image.PreserveAspectCrop; visible: source.toString().length > 0; MouseArea { anchors.fill: parent; onClicked: backend.openCharacters(backend.current.characterId) } }
             Label { text: backend.current.exists ? "Реплика " + backend.current.number : "Новая реплика"; font.bold: true; font.pixelSize: 16; color: panel.colors.text }
-            Label { visible: backend.current.comment; text: "Комментарий"; color: panel.colors.muted }
+            Label { visible: backend.current.comment; text: "ASS-комментарий"; color: panel.colors.muted }
             Item { Layout.fillWidth: true }
             ControlButton { symbol: "chevron-left"; enabled: backend.currentIndex > 0; onClicked: backend.navigate(-1); hint: "Предыдущая реплика · " + backend.shortcutLabel("previous") }
             ControlButton { symbol: "chevron-right"; enabled: backend.currentIndex < backend.count - 1; onClicked: backend.navigate(1); hint: "Следующая реплика · " + backend.shortcutLabel("next") }
@@ -116,13 +118,27 @@ Pane {
         }
         RowLayout {
             Layout.fillWidth: true
-            Label { text: backend.current.cps + " зн/с"; color: backend.current.cps > backend.cpsLimit ? panel.colors.warning : panel.colors.muted; font.pixelSize: 12 }
+            Button { text: "Заметки и правки" + (backend.currentReviews.length ? " · " + backend.currentReviews.filter(r => r.state === "open").length : ""); enabled: backend.current.exists; onClicked: backend.openReviews() }
+            Button { text: "+ Заметка"; enabled: backend.current.exists; onClicked: panel.composeRequested("note") }
+            Button { text: "Предложить правку"; enabled: backend.current.exists; onClicked: panel.composeRequested("proposal") }
+            Item { Layout.fillWidth: true }
+            Button { text: "Карточка"; flat: true; onClicked: backend.openCharacters(backend.current.characterId || "") }
+        }
+        Label {
+            Layout.fillWidth: true
+            visible: backend.currentReviews.some(r => r.state === "open")
+            text: { let entry = backend.currentReviews.find(r => r.state === "open"); return entry ? (entry.kind === "note" ? "✎ " : "↔ ") + (entry.text || entry.replacement.replace(/\\N/g, " ")) : "" }
+            textFormat: Text.PlainText; color: panel.colors.muted; font.pixelSize: 11; elide: Text.ElideRight
+        }
+        RowLayout {
+            Layout.fillWidth: true
+            Label { text: backend.current.cps + " зн/с"; color: backend.reviewSettings.readingSpeed && backend.current.cps > backend.cpsLimit ? panel.colors.warning : panel.colors.muted; font.pixelSize: 12 }
             Label { text: (backend.current.maxLine || 0) + " / " + backend.lineLimit; color: panel.colors.muted; font.pixelSize: 12 }
             Item { Layout.fillWidth: true }
             ControlButton { objectName: "playCueButton"; symbol: "play"; enabled: backend.media.hasMedia && backend.current.exists; onClicked: backend.playCurrent(false); hint: "Воспроизвести реплику · " + backend.shortcutLabel("playLine") }
             ControlButton {
                 objectName: "applyCueButton"
-                text: (panel.translationMode ? "Готово и дальше" : "Применить") + "  " + backend.shortcutLabel("apply")
+                text: (panel.translationMode ? "Следующая реплика" : "Применить") + "  " + backend.shortcutLabel("apply")
                 enabled: backend.current.exists
                 highlighted: true
                 palette.buttonText: Qt.platform.os !== "osx" || (Window.active && enabled) ? panel.colors.selectedText : panel.colors.text

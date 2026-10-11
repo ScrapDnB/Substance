@@ -20,10 +20,10 @@ log = logging.getLogger(__name__)
 
 FILTERS = (
     ('all', 'Все реплики', 'text.alignleft'),
-    ('missing', 'Без перевода', 'bubble.left'),
-    ('review', 'Непроверенные', 'clock'),
     ('warnings', 'Замечания', 'exclamationmark.triangle'),
-    ('done', 'Готово', 'checkmark.circle'),
+    ('notes', 'С заметками', 'note.text'),
+    ('proposals', 'Предложения правок', 'text.badge.plus'),
+    ('characters', 'Персонажи', 'person.crop.square'),
 )
 
 if sys.platform == 'darwin':

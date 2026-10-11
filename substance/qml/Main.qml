@@ -15,6 +15,7 @@ ApplicationWindow {
     readonly property bool nativeToolbar: macOSIntegration !== null && macOSIntegration.nativeToolbarActive
     readonly property bool modalOpen: settingsDialog.visible || spellingDialog.visible || findDialog.visible
                                      || shiftDialog.visible || leadDialog.visible || actorDialog.visible
+                                     || reviewsDialog.visible || reviewCompose.visible || characterDialog.visible || portraitCropDialog.visible
     visible: startupChromeReady
     title: (backend.dirty ? "● " : "") + backend.title + " — Substance"
     font.pixelSize: 13
@@ -64,7 +65,7 @@ ApplicationWindow {
     Action { id: redoAction; text: "Повторить"; shortcut: backend.shortcuts.redo; enabled: backend.canRedo; onTriggered: backend.redo() }
     Action { id: findAction; text: "Найти…"; shortcut: backend.shortcuts.find; onTriggered: { findDialog.replaceMode = false; findDialog.open(); findInput.forceActiveFocus() } }
     Action { id: replaceAction; text: "Найти и заменить…"; shortcut: backend.shortcuts.replace; onTriggered: { findDialog.replaceMode = true; findDialog.open(); findInput.forceActiveFocus() } }
-    Action { id: applyAction; text: "Применить / готово и дальше"; shortcut: backend.shortcuts.apply; enabled: backend.current.exists; onTriggered: backend.apply(backend.mode === "translation") }
+    Action { id: applyAction; text: "Применить / следующая реплика"; shortcut: backend.shortcuts.apply; enabled: backend.current.exists; onTriggered: backend.apply(backend.mode === "translation") }
     Action { id: addAction; text: "Добавить реплику"; shortcut: backend.shortcuts.newLine; onTriggered: backend.addLine() }
     Action { id: duplicateAction; text: "Дублировать выбранные"; shortcut: backend.shortcuts.duplicate; enabled: backend.current.exists; onTriggered: backend.duplicateLines() }
     Action { id: splitAction; text: "Разделить по курсору"; shortcut: backend.shortcuts.split; enabled: backend.current.exists; onTriggered: backend.splitLine(window.editCursor) }
@@ -124,6 +125,8 @@ ApplicationWindow {
             MenuSeparator { }
             MenuItem { action: findAction }
             MenuItem { action: replaceAction }
+            MenuItem { text: "Заметки и предложения…"; onTriggered: backend.openReviews() }
+            MenuItem { text: "Персонажи проекта…"; onTriggered: backend.openCharacters("") }
             MenuItem { text: "Проверить орфографию…"; onTriggered: spellingDialog.open() }
             MenuSeparator { }
             MenuItem { action: copyAction }
@@ -155,8 +158,6 @@ ApplicationWindow {
             MenuItem { action: nextAction }
             MenuSeparator { }
             MenuItem { text: "Назначить персонажа…"; onTriggered: actorDialog.open() }
-            MenuItem { text: "Отметить готовыми"; onTriggered: backend.batch("status", "done", false) }
-            MenuItem { text: "Отправить на проверку"; onTriggered: backend.batch("status", "review", false) }
             MenuItem { text: "Сортировать по началу"; onTriggered: backend.batch("sort", "", true) }
         }
         Menu {
@@ -245,7 +246,7 @@ ApplicationWindow {
                 spacing: 4
                 Label { text: "ДОКУМЕНТ"; color: window.colors.muted; font.pixelSize: 10; font.bold: true; Layout.margins: 8 }
                 Repeater {
-                    model: [ {key:"all", title:"Все реплики", symbol:"≡"}, {key:"missing", title:"Без перевода", symbol:"○"}, {key:"review", title:"Непроверенные", symbol:"◷"}, {key:"warnings", title:"Замечания", symbol:"⚠"}, {key:"done", title:"Готово", symbol:"✓"} ]
+                    model: [ {key:"all", title:"Все реплики", symbol:"≡"}, {key:"warnings", title:"Замечания", symbol:"⚠"}, {key:"notes", title:"С заметками", symbol:"✎"}, {key:"proposals", title:"Предложения правок", symbol:"↔"}, {key:"characters", title:"Персонажи", symbol:"♙"} ]
                     delegate: ItemDelegate {
                         id: filterItem
                         required property var modelData
@@ -315,12 +316,12 @@ ApplicationWindow {
             orientation: Qt.Vertical
             handle: Rectangle { implicitHeight: 5; color: window.colors.header; Rectangle { width: 40; height: 2; color: window.colors.border; anchors.centerIn: parent } }
             SplitView {
-                SplitView.preferredHeight: 340
+                SplitView.preferredHeight: 400
                 SplitView.minimumHeight: 240
                 orientation: Qt.Horizontal
                 handle: Rectangle { implicitWidth: 1; color: window.colors.border }
                 VideoPane { colors: window.colors; SplitView.preferredWidth: workspace.width * 0.47; SplitView.minimumWidth: 280 }
-                CueEditor { colors: window.colors; SplitView.fillWidth: true; SplitView.minimumWidth: 390; onEditorCursorChanged: position => window.editCursor = position }
+                CueEditor { colors: window.colors; SplitView.fillWidth: true; SplitView.minimumWidth: 390; onEditorCursorChanged: position => window.editCursor = position; onComposeRequested: kind => reviewCompose.create(kind) }
             }
             AudioPane { colors: window.colors; SplitView.preferredHeight: 192; SplitView.minimumHeight: 145; SplitView.maximumHeight: 350 }
             SubtitleTable { colors: window.colors; SplitView.fillHeight: true; SplitView.minimumHeight: 130 }
@@ -337,7 +338,7 @@ ApplicationWindow {
                 orientation: Qt.Vertical
                 handle: Rectangle { implicitHeight: 5; color: window.colors.header }
                 SubtitleTable { colors: window.colors; SplitView.fillHeight: true; SplitView.minimumHeight: 130 }
-                CueEditor { colors: window.colors; SplitView.preferredHeight: 315; SplitView.minimumHeight: 245; onEditorCursorChanged: position => window.editCursor = position }
+                CueEditor { colors: window.colors; SplitView.preferredHeight: 395; SplitView.minimumHeight: 315; onEditorCursorChanged: position => window.editCursor = position; onComposeRequested: kind => reviewCompose.create(kind) }
             }
             ColumnLayout {
                 SplitView.fillWidth: true
@@ -396,6 +397,18 @@ ApplicationWindow {
             else backend.openPath(path)
         }
     }
+    ReviewCompose { id: reviewCompose; objectName: "reviewComposeDialog"; colors: window.colors }
+    ReviewsDialog { id: reviewsDialog; objectName: "reviewsDialog"; colors: window.colors; onComposeRequested: kind => reviewCompose.create(kind); onEditRequested: entry => reviewCompose.edit(entry) }
+    CharacterDialog { id: characterDialog; objectName: "characterDialog"; colors: window.colors }
+    PortraitCropDialog { id: portraitCropDialog; objectName: "portraitCropDialog"; colors: window.colors }
+    Connections {
+        target: backend
+        function onReviewsRequested() { reviewsDialog.open() }
+        function onCardsRequested(cardId) { characterDialog.open(); characterDialog.reload() }
+        function onCropRequested() { portraitCropDialog.open() }
+        function onDocumentReplaced() { characterDialog.modified = false; characterDialog.close(); portraitCropDialog.close(); reviewsDialog.close(); reviewCompose.close() }
+    }
+
     SettingsDialog { id: settingsDialog; colors: window.colors }
 
     Dialog {

@@ -7,6 +7,7 @@ import re
 
 from .document import Cue, Document, identity, plain_text
 from .timecode import frame_time
+from .project import ProjectEdits, sync_characters, rebind_reviews
 
 
 @dataclass
@@ -18,9 +19,10 @@ class HistoryEntry:
     after_revision: int
 
 
-class Editor:
+class Editor(ProjectEdits):
     def __init__(self, document: Document | None = None):
         self.document = document or Document()
+        self.project_mode = bool(self.document.characters)
         self.undo_stack: list[HistoryEntry] = []
         self.redo_stack: list[HistoryEntry] = []
         self.revision = self.saved_revision = 0
@@ -37,6 +39,8 @@ class Editor:
         before = self.document
         after = deepcopy(before)
         edit(after)
+        if self.project_mode:
+            sync_characters(after)
         after.validate()
         if after == before:
             return False
@@ -67,28 +71,34 @@ class Editor:
         return entry.label
 
     def update(self, index: int, **values) -> bool:
-        allowed = {"start", "end", "text", "translation", "character", "status", "comment"}
+        allowed = {"start", "end", "text", "translation", "character", "comment"}
         if not set(values) <= allowed:
             raise ValueError("Неизвестное поле реплики")
         def apply(doc):
             cue = doc.cues[index]
             for key, value in values.items():
                 setattr(cue, key, value)
-            if "translation" in values:
-                cue.extras.pop("authoring", None)
-            if cue.extras.get("authoring"):
-                related = [other for other in doc.cues if other is not cue and set(other.source_ids).intersection(cue.source_ids)]
-                if related:
-                    cue.extras.pop("authoring", None)
-                    for other in related:
-                        other.extras.pop("authoring", None)
-            if cue.extras.get("authoring"):
-                cue.original = cue.text
-                source = doc.source_lines[cue.source_ids[0]]
-                source.update(text=cue.original, start=cue.start / 1000, end=cue.end / 1000, character=cue.character)
-            if "start" in values or "end" in values:
-                cue.extras.pop("untimed", None)
+            if "character" in values:
+                cue.character_id = ""
+            self._sync_authored(doc, cue, values)
         return self.transact("Изменение реплики", apply)
+
+    @staticmethod
+    def _sync_authored(doc, cue, values):
+        if "translation" in values:
+            cue.extras.pop("authoring", None)
+        if cue.extras.get("authoring"):
+            related = [other for other in doc.cues if other is not cue and set(other.source_ids).intersection(cue.source_ids)]
+            if related:
+                cue.extras.pop("authoring", None)
+                for other in related:
+                    other.extras.pop("authoring", None)
+        if cue.extras.get("authoring"):
+            cue.original = cue.text
+            source = doc.source_lines[cue.source_ids[0]]
+            source.update(text=cue.original, start=cue.start / 1000, end=cue.end / 1000, character=cue.character)
+        if "start" in values or "end" in values:
+            cue.extras.pop("untimed", None)
 
     def add(self, after: int = -1, position: int | None = None) -> int:
         def apply(doc):
@@ -113,7 +123,6 @@ class Editor:
             for index in sorted(set(indices), reverse=True):
                 copy = deepcopy(doc.cues[index])
                 copy.id = identity("frag")
-                copy.status = "draft"
                 doc.cues.insert(index + 1, copy)
             last = max(indices) + len(set(indices)) if indices else -1
         self.transact("Дублирование реплик", apply)
@@ -131,7 +140,6 @@ class Editor:
             second = deepcopy(cue)
             second.id = identity("frag")
             second.start, cue.end = when, when
-            cue.status = second.status = "draft"
             cue.extras.pop("authoring", None)
             second.extras.pop("authoring", None)
             first_text, second_text = text[:cursor].rstrip(), text[cursor:].lstrip()
@@ -140,6 +148,7 @@ class Editor:
             else:
                 cue.text, second.text = first_text, second_text
             doc.cues.insert(index + 1, second)
+            rebind_reviews(doc, {cue.id}, [cue.id, second.id])
         self.transact("Разделение реплики", apply)
 
     def merge(self, indices: list[int]) -> None:
@@ -156,8 +165,10 @@ class Editor:
             result.extras.pop("authoring", None)
             result.text = r"\N".join(c.text for c in cues)
             result.translation = r"\N".join(c.output_text for c in cues) if any(c.translation is not None for c in cues) else None
-            result.status = "draft"
+            if len({c.character_id for c in cues}) > 1:
+                result.character_id, result.character = "", ""
             doc.cues[indices[0]:indices[-1] + 1] = [result]
+            rebind_reviews(doc, {c.id for c in cues}, [result.id])
         self.transact("Объединение реплик", apply)
 
     def shift(self, indices: list[int], delta: int, edges: str = "both") -> None:
@@ -180,10 +191,9 @@ class Editor:
                 return
             for i in indices:
                 c = doc.cues[i]
-                if action == "status":
-                    c.status = value
-                elif action == "character":
+                if action == "character":
                     c.character = str(value)
+                    c.character_id = ""
                 elif action == "comment":
                     c.comment = bool(value)
                 elif action == "frames":
@@ -219,14 +229,13 @@ class Editor:
                         c.translation = value
                     else:
                         c.text = value
-                    if c.status == "done":
-                        c.status = "review"
+                    self._sync_authored(doc, c, {"translation" if c.translation is not None else "text": value})
                     count += n
         self.transact("Поиск и замена", apply)
         return count
 
 
-def quality(cue: Cue, *, next_cue: Cue | None = None, cps_limit=20, line_limit=42, line_count_limit=2) -> dict:
+def quality(cue: Cue, *, next_cue: Cue | None = None, cps_limit=20, line_limit=42, line_count_limit=2, show_length=True, show_speed=True, show_lines=True) -> dict:
     text = plain_text(cue.output_text)
     cps = len(text.replace("\n", "")) * 1000 / max(1, cue.end - cue.start)
     lines = text.splitlines() or [""]
@@ -237,11 +246,11 @@ def quality(cue: Cue, *, next_cue: Cue | None = None, cps_limit=20, line_limit=4
         messages.append("Тайминг ещё не задан")
     if not text.strip() and not cue.comment:
         messages.append("Пустая реплика")
-    if cps > cps_limit:
+    if show_speed and cps > cps_limit:
         messages.append(f"Скорость чтения: {cps:.1f} зн/с")
-    if max(map(len, lines)) > line_limit:
+    if show_length and max(map(len, lines)) > line_limit:
         messages.append(f"Строка длиннее {line_limit} знаков")
-    if len(lines) > line_count_limit:
+    if show_lines and len(lines) > line_count_limit:
         messages.append(f"Больше {line_count_limit} строк")
     if next_cue and not cue.comment and not next_cue.comment and cue.end > next_cue.start and cue.start < next_cue.end:
         messages.append("Пересечение с соседней репликой")

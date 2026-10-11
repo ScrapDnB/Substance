@@ -31,3 +31,23 @@
 5. Проверить split/merge/delete/duplicate, переоткрытие, обновление внешнего исходника и отклонение новых схем на реальных проектах DM до включения записи.
 
 Приватные файлы из `DubbingManager/test_files` используются только как данные проверок чтения/сохранения ASS; наличие этих тестов не является подтверждением готового импорта проектов DM.
+
+## Substance schema 2
+
+The standalone project stores `reviews`, `characters`, a content-addressed
+`images` registry and `review_settings`. Cues link to characters by `character_id`.
+Schema 1 is still read; former cue statuses are preserved as legacy extras and
+have no runtime behavior. Unknown fields of cues, review records, cards and the
+project survive round trips. More recent schemas are rejected.
+
+Review proposals store a target field, baseline and replacement. Applying an
+outdated proposal is rejected; rebasing selects one current cue. Structural edits
+rebind notes and invalidate pending proposals. Deleted-cue records remain archived.
+
+Image assets are JPEG/PNG encoded as Base64, keyed by SHA-256. Portraits reference
+a bounded source image, crop rectangle, rendered image, video path and timestamp.
+Resources are immutable; deleting an unused portrait prunes resources in the new
+revision, while undo history retains the previous revision.
+
+Plain export writes only subtitles. ASS translation sidecars omit project-only
+records and clear character IDs; they are not character-card projects.
