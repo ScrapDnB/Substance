@@ -50,7 +50,23 @@ ApplicationWindow {
     palette.highlightedText: colors.selectedText
     color: colors.surface
 
-    onClosing: close => { close.accepted = backend.requestClose() }
+    function closeAuxiliaryWindows() {
+        notification.close()
+        reviewCompose.close()
+        portraitCropDialog.close()
+        actorDialog.close()
+        reviewsDialog.close()
+        characterDialog.close()
+        settingsDialog.close()
+        spellingDialog.close()
+        findDialog.close()
+        shiftDialog.close()
+        leadDialog.close()
+    }
+    onClosing: close => {
+        close.accepted = backend.requestClose()
+        if (close.accepted) closeAuxiliaryWindows()
+    }
     Connections {
         target: window.macOSIntegration
         function onSidebarRequested() { window.sidebarVisible = !window.sidebarVisible }
@@ -82,6 +98,7 @@ ApplicationWindow {
     Action { id: frameBackAction; text: "Предыдущий кадр"; shortcut: backend.shortcuts.frameBack; enabled: backend.media.hasMedia; onTriggered: backend.stepFrame(-1) }
     Action { id: frameForwardAction; text: "Следующий кадр"; shortcut: backend.shortcuts.frameForward; enabled: backend.media.hasMedia; onTriggered: backend.stepFrame(1) }
     Action { id: shiftAction; text: "Сдвиг времени…"; shortcut: backend.shortcuts.shift; enabled: backend.count > 0; onTriggered: shiftDialog.open() }
+    Action { id: assignCharacterAction; text: "Назначить персонажа…"; shortcut: backend.shortcuts.assignCharacter; enabled: backend.current.exists && !backend.busy && !window.modalOpen; onTriggered: { if (backend.flush()) actorDialog.open() } }
     Action { id: quitAction; text: "Выйти из Substance"; shortcut: StandardKey.Quit; onTriggered: window.close() }
     Shortcut { sequence: "Space"; enabled: backend.media.hasMedia && !window.textInputFocused(); onActivated: backend.media.toggle() }
 
@@ -115,7 +132,7 @@ ApplicationWindow {
             MenuItem { text: "Открыть видео или аудио…"; onTriggered: backend.openMedia() }
             MenuItem { text: "Импорт субтитров из видео…"; onTriggered: backend.importEmbedded() }
             MenuSeparator { }
-            MenuItem { action: Action { text: "Закрыть окно"; shortcut: StandardKey.Close; onTriggered: window.close() } }
+            MenuItem { action: Action { text: "Закрыть окно"; shortcut: StandardKey.Close; enabled: !window.modalOpen; onTriggered: window.close() } }
             MenuItem { action: quitAction; visible: !backend.isMac }
         }
         Menu {
@@ -157,7 +174,7 @@ ApplicationWindow {
             MenuItem { action: previousAction }
             MenuItem { action: nextAction }
             MenuSeparator { }
-            MenuItem { text: "Назначить персонажа…"; onTriggered: actorDialog.open() }
+            MenuItem { action: assignCharacterAction }
             MenuItem { text: "Сортировать по началу"; onTriggered: backend.batch("sort", "", true) }
         }
         Menu {
@@ -397,27 +414,28 @@ ApplicationWindow {
             else backend.openPath(path)
         }
     }
-    ReviewCompose { id: reviewCompose; objectName: "reviewComposeDialog"; colors: window.colors }
+    ReviewCompose { id: reviewCompose; objectName: "reviewComposeDialog"; transientParent: reviewsDialog.visible ? reviewsDialog : window; colors: window.colors }
     ReviewsDialog { id: reviewsDialog; objectName: "reviewsDialog"; colors: window.colors; onComposeRequested: kind => reviewCompose.create(kind); onEditRequested: entry => reviewCompose.edit(entry) }
     CharacterDialog { id: characterDialog; objectName: "characterDialog"; colors: window.colors }
-    PortraitCropDialog { id: portraitCropDialog; objectName: "portraitCropDialog"; colors: window.colors }
+    PortraitCropDialog { id: portraitCropDialog; objectName: "portraitCropDialog"; transientParent: characterDialog.visible ? characterDialog : window; colors: window.colors }
     Connections {
         target: backend
         function onReviewsRequested() { reviewsDialog.open() }
         function onCardsRequested(cardId) { characterDialog.open(); characterDialog.reload() }
         function onCropRequested() { portraitCropDialog.open() }
-        function onDocumentReplaced() { characterDialog.modified = false; characterDialog.close(); portraitCropDialog.close(); reviewsDialog.close(); reviewCompose.close() }
+        function onDocumentReplaced() { characterDialog.modified = false; characterDialog.close(); portraitCropDialog.close(); reviewsDialog.close(); reviewCompose.close(); actorDialog.close() }
     }
 
-    SettingsDialog { id: settingsDialog; colors: window.colors }
+    SettingsDialog { id: settingsDialog; objectName: "settingsDialog"; colors: window.colors }
 
-    Dialog {
+    NativeDialog {
+        colors: window.colors
         id: spellingDialog
+        objectName: "spellingDialog"
         title: "Орфография"
         modal: true
-        width: 700
-        height: 500
-        anchors.centerIn: Overlay.overlay
+        preferredWidth: 760
+        preferredHeight: 520
         standardButtons: Dialog.Close
         ColumnLayout {
             anchors.fill: parent
@@ -449,19 +467,20 @@ ApplicationWindow {
         }
     }
 
-    Dialog {
+    NativeDialog {
+        colors: window.colors
         id: findDialog
+        objectName: "findDialog"
         property bool replaceMode: false
         title: replaceMode ? "Найти и заменить" : "Найти"
         modal: true
-        width: 480
-        anchors.centerIn: Overlay.overlay
+        preferredWidth: 560
         standardButtons: Dialog.Close
         ColumnLayout {
             anchors.fill: parent
             spacing: 12
-            TextField { id: findInput; Layout.fillWidth: true; placeholderText: "Найти"; onAccepted: backend.setSearch(text, caseSensitive.checked, regex.checked) }
-            TextField { id: replacementInput; visible: findDialog.replaceMode; Layout.fillWidth: true; placeholderText: "Заменить на" }
+            DialogTextField { id: findInput; Layout.fillWidth: true; placeholderText: "Найти"; onAccepted: backend.setSearch(text, caseSensitive.checked, regex.checked) }
+            DialogTextField { id: replacementInput; visible: findDialog.replaceMode; Layout.fillWidth: true; placeholderText: "Заменить на" }
             RowLayout { CheckBox { id: caseSensitive; text: "Учитывать регистр" } CheckBox { id: regex; text: "Регулярное выражение" } }
             CheckBox { id: selectedOnly; visible: findDialog.replaceMode; text: "Только в выбранных репликах" }
             RowLayout {
@@ -472,45 +491,43 @@ ApplicationWindow {
             }
         }
     }
-    Dialog {
+    NativeDialog {
+        colors: window.colors
         id: shiftDialog
+        objectName: "shiftDialog"
         title: "Сдвиг времени"
-        width: 420
+        preferredWidth: 480
         modal: true
-        anchors.centerIn: Overlay.overlay
         standardButtons: Dialog.Ok | Dialog.Cancel
         onAccepted: backend.shift(Number(shiftAmount.text), ["both", "start", "end"][shiftEdges.currentIndex], shiftAll.checked)
         ColumnLayout {
             anchors.fill: parent
             Label { text: "Сдвиг в миллисекундах · отрицательный — раньше"; wrapMode: Text.Wrap; Layout.fillWidth: true }
-            TextField { id: shiftAmount; text: "0"; validator: IntValidator { } }
+            DialogTextField { id: shiftAmount; text: "0"; validator: IntValidator { } }
             ComboBox { id: shiftEdges; model: ["Начало и конец", "Только начало", "Только конец"] }
             CheckBox { id: shiftAll; text: "Все реплики документа" }
             Label { text: "Некорректные интервалы отклоняются целиком."; font.pixelSize: 11; color: window.colors.muted }
         }
     }
-    Dialog {
+    NativeDialog {
+        colors: window.colors
         id: leadDialog
+        objectName: "leadDialog"
         title: "Отступы тайминга"
-        width: 390
+        preferredWidth: 430
         modal: true
-        anchors.centerIn: Overlay.overlay
         standardButtons: Dialog.Ok | Dialog.Cancel
         onAccepted: backend.batch("lead", leadIn.value + "," + leadOut.value, leadAll.checked)
-        ColumnLayout { anchors.fill: parent; Label { text: "Вход, мс" } SpinBox { id: leadIn; from: 0; to: 5000; value: 100; editable: true } Label { text: "Выход, мс" } SpinBox { id: leadOut; from: 0; to: 5000; value: 200; editable: true } CheckBox { id: leadAll; text: "Все реплики документа" } }
+        ColumnLayout { anchors.fill: parent; Label { text: "Вход, мс" } DialogSpinBox { id: leadIn; from: 0; to: 5000; value: 100; editable: true } Label { text: "Выход, мс" } DialogSpinBox { id: leadOut; from: 0; to: 5000; value: 200; editable: true } CheckBox { id: leadAll; text: "Все реплики документа" } }
     }
-    Dialog {
+    AssignCharacterDialog {
         id: actorDialog
-        title: "Персонаж для выбранных реплик"
-        modal: true
-        width: 390
-        anchors.centerIn: Overlay.overlay
-        standardButtons: Dialog.Ok | Dialog.Cancel
-        onAccepted: backend.batch("character", actorName.text, false)
-        TextField { id: actorName; anchors.fill: parent; placeholderText: "Имя персонажа" }
+        objectName: "assignCharacterDialog"
+        colors: window.colors
     }
     Popup {
         id: notification
+        popupType: Popup.Item
         parent: Overlay.overlay
         // Keep toasts in the workspace, outside the native navigation layer.
         x: (parent.width + (window.sidebarVisible ? sidebarPane.width : 0) - width) / 2

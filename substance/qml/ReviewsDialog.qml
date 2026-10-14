@@ -2,19 +2,15 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 
-Dialog {
+NativeDialog {
     id: dialog
-    required property var colors
-    popupType: Popup.Item
     signal composeRequested(string kind)
     signal editRequested(var entry)
     title: "Заметки и предложения правок"
-    width: Math.min(800, parent.width - 40)
-    height: Math.min(740, parent.height - 60)
+    preferredWidth: 800
+    preferredHeight: 740
     modal: true
-    anchors.centerIn: Overlay.overlay
-    standardButtons: Dialog.NoButton
-    footer: DialogButtonBox { Button { text: "Закрыть"; DialogButtonBox.buttonRole: DialogButtonBox.RejectRole } onRejected: dialog.close() }
+    standardButtons: Dialog.Close
     ColumnLayout {
         anchors.fill: parent
         RowLayout {

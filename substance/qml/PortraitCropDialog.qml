@@ -2,20 +2,17 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 
-Dialog {
+NativeDialog {
     id: dialog
-    required property var colors
-    popupType: Popup.Item
     property real cropX: 0
     property real cropY: 0
     property real cropW: 1
     property real cropH: 1
     property real lockedRatio: 0
     title: "Портрет персонажа — обрезка"
-    width: Math.min(980, parent.width - 40)
-    height: Math.min(760, parent.height - 60)
+    preferredWidth: 980
+    preferredHeight: 760
     modal: true
-    anchors.centerIn: Overlay.overlay
     standardButtons: Dialog.NoButton
     function clamp(value, min, max) { return Math.min(max, Math.max(min, value)) }
     function resetCrop() {
@@ -140,7 +137,7 @@ Dialog {
             Layout.fillWidth: true
             Label { text: "Персонаж" }
             ComboBox { id: recipient; objectName: "portraitRecipient"; Layout.fillWidth: true; model: ["Создать нового…"].concat(backend.characterCards.map(c => c.name)) }
-            TextField { id: newName; objectName: "portraitNewName"; visible: recipient.currentIndex === 0; placeholderText: "Имя нового персонажа"; Layout.preferredWidth: 220 }
+            DialogTextField { id: newName; objectName: "portraitNewName"; visible: recipient.currentIndex === 0; placeholderText: "Имя нового персонажа"; Layout.preferredWidth: 220 }
         }
         RowLayout {
             Layout.fillWidth: true

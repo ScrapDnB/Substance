@@ -63,7 +63,8 @@ def main():
         QTimer.singleShot(0, lambda: QMetaObject.invokeMethod(item, 'clicked'))
         wait(150)
     def screenshot(name, popup_name=''):
-        check(window.grabWindow().save(str(qa / name)), name + ' captured')
+        target = window.findChild(QObject, popup_name) if popup_name else window
+        check(target.grabWindow().save(str(qa / name)), name + ' captured')
     try:
         engine.load(QUrl.fromLocalFile(str(root / 'substance/qml/Main.qml')))
         check(bool(engine.rootObjects()), 'QML window loaded')

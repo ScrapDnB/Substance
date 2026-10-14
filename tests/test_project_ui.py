@@ -41,6 +41,94 @@ def test_project_gate_and_cancel_preserves_document(bridge, monkeypatch):
     assert not b.isProject
 
 
+def test_character_suggestions_include_unused_cards_and_aliases(bridge):
+    app, b = bridge
+    cid = b.editor.save_character('', 'ПРАЙД', ['Pride'], '', '', '', '')
+    b._refresh()
+    assert b.characterSuggestions(' пра ')[0]['id'] == cid
+    assert b.characterSuggestions('pri')[0]['name'] == 'ПРАЙД'
+    b.select(0, 0)
+    b.select(1, Qt.KeyboardModifier.ShiftModifier.value)
+    assert b.assignCharacterName('прайд', False)
+    assert all(c.character_id == cid for c in b.editor.document.cues[:2])
+
+
+def test_qml_keyboard_character_assignment(bridge):
+    app, b = bridge
+    b.editor.save_character('', 'ПРАЙД', [], '', '', '', '')
+    b.editor.save_character('', 'ПРАЙД II', [], '', '', '', '')
+    b._refresh()
+    b.setMode('translation')
+    messages = []
+    previous = qInstallMessageHandler(lambda kind, context, message: messages.append(message))
+    engine = QQmlApplicationEngine()
+    engine.addImageProvider('project', ProjectImageProvider(b))
+    engine.rootContext().setContextProperty('backend', b)
+    try:
+        engine.load(QUrl.fromLocalFile(str(ROOT / 'substance/qml/Main.qml')))
+        assert engine.rootObjects(), messages
+        w = engine.rootObjects()[0]
+        QTest.qWait(100)
+        field = w.findChild(QObject, 'subtitleEditor')
+        field.setProperty('text', 'Набранный перевод')
+        field.forceActiveFocus()
+        def open_dialog():
+            QTest.keyClick(w, Qt.Key.Key_QuoteLeft, Qt.KeyboardModifier.ControlModifier)
+            QTest.qWait(100)
+            assert w.findChild(QObject, 'assignCharacterDialog').property('visible')
+            assert w.findChild(QObject, 'assignCharacterName').property('activeFocus')
+        def click(name):
+            item = w.findChild(QObject, name)
+            point = item.mapToScene(QPointF(item.width()/2, item.height()/2)).toPoint()
+            QTest.mouseClick(item.window(), Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, point)
+            QTest.qWait(80)
+        open_dialog()
+        assert b.editor.document.cues[0].translation == 'Набранный перевод'
+        name = w.findChild(QObject, 'assignCharacterName')
+        name.setProperty('text', 'пра')
+        assert w.findChild(QObject, 'characterSuggestions').property('count') == 2
+        QTest.keyClick(app.focusWindow(), Qt.Key.Key_Return)
+        QTest.qWait(100)
+        assert b.current['character'] == 'ПРАЙД'
+        assert not w.findChild(QObject, 'assignCharacterDialog').property('visible')
+        assert field.property('activeFocus')
+        open_dialog()
+        name.setProperty('text', 'пра')
+        QTest.keyClick(app.focusWindow(), Qt.Key.Key_Down)
+        QTest.keyClick(app.focusWindow(), Qt.Key.Key_Return)
+        QTest.qWait(100)
+        assert b.current['character'] == 'ПРАЙД II'
+        open_dialog()
+        name.setProperty('text', 'Новый персонаж')
+        before = b.editor.document.to_dict()
+        QTest.keyClick(app.focusWindow(), Qt.Key.Key_Return)
+        QTest.qWait(100)
+        assert w.findChild(QObject, 'createCharacterConfirmation').property('visible')
+        click('cancelCharacterCreation')
+        assert b.editor.document.to_dict() == before
+        assert name.property('activeFocus')
+        QTest.keyClick(app.focusWindow(), Qt.Key.Key_Return)
+        QTest.qWait(100)
+        assert w.findChild(QObject, 'acceptCharacterCreation').property('activeFocus')
+        QTest.keyClick(app.focusWindow(), Qt.Key.Key_Return)
+        QTest.qWait(100)
+        assert b.current['character'] == 'Новый персонаж'
+        b.undo()
+        assert b.editor.document.to_dict() == before
+        open_dialog()
+        QTest.keyClick(app.focusWindow(), Qt.Key.Key_Escape)
+        QTest.qWait(100)
+        assert not w.findChild(QObject, 'assignCharacterDialog').property('visible')
+        assert b.editor.document.to_dict() == before
+        errors = [m for m in messages if any(s in m for s in ('ReferenceError', 'TypeError', 'failed to load', 'Binding loop', 'Cannot assign'))]
+        assert not errors, errors
+    finally:
+        if engine.rootObjects():
+            shiboken6.delete(engine.rootObjects()[0])
+        shiboken6.delete(engine)
+        qInstallMessageHandler(previous)
+
+
 def test_warning_filters_cache_and_undo(bridge):
     app, b = bridge
     b.editor.update(0, text='A' * 90, end=3200)
@@ -150,7 +238,7 @@ def test_qml_review_and_portrait_workflow(bridge):
             item = w.findChild(QObject, name)
             assert item is not None and item.property('enabled')
             p = item.mapToScene(QPointF(item.width()/2, item.height()/2)).toPoint()
-            QTest.mouseClick(w, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, p)
+            QTest.mouseClick(item.window(), Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, p)
             QTest.qWait(80)
         js("reviewCompose.create('note')")
         w.findChild(QObject, 'reviewComment').setProperty('text', 'A note from the UI')
@@ -173,16 +261,16 @@ def test_qml_review_and_portrait_workflow(bridge):
         crop_rect = w.findChild(QObject, 'portraitCropRect')
         old_x = crop_dialog.property('cropX')
         center = crop_rect.mapToScene(QPointF(crop_rect.width()/2, crop_rect.height()/2)).toPoint()
-        QTest.mousePress(w, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, center)
-        QTest.mouseMove(w, center + QPointF(20, 0).toPoint(), 20)
-        QTest.mouseRelease(w, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, center + QPointF(20, 0).toPoint())
+        QTest.mousePress(crop_rect.window(), Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, center)
+        QTest.mouseMove(crop_rect.window(), center + QPointF(20, 0).toPoint(), 20)
+        QTest.mouseRelease(crop_rect.window(), Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, center + QPointF(20, 0).toPoint())
         assert crop_dialog.property('cropX') > old_x
         corner = next(item for item in crop_rect.childItems() if item.objectName() == 'portraitCorner3')
         old_width = crop_dialog.property('cropW')
         point = corner.mapToScene(QPointF(corner.width()/2, corner.height()/2)).toPoint()
-        QTest.mousePress(w, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, point)
-        QTest.mouseMove(w, point - QPointF(25, 25).toPoint(), 20)
-        QTest.mouseRelease(w, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, point - QPointF(25, 25).toPoint())
+        QTest.mousePress(crop_rect.window(), Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, point)
+        QTest.mouseMove(crop_rect.window(), point - QPointF(25, 25).toPoint(), 20)
+        QTest.mouseRelease(crop_rect.window(), Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, point - QPointF(25, 25).toPoint())
         assert crop_dialog.property('cropW') < old_width
         assert crop_dialog.property('cropW') * 320 / (crop_dialog.property('cropH') * 180) == pytest.approx(1)
         click('savePortraitCrop')
@@ -229,3 +317,58 @@ def test_save_as_ass_exports_without_leaving_project(bridge, monkeypatch, tmp_pa
     assert b.path == original and b.isProject and b.dirty
     assert 'Project-only note' not in output.read_text()
     assert not output.with_name(output.name+'.substance').exists()
+
+
+def test_auxiliary_windows_lifecycle_and_standard_buttons(bridge):
+    app, b = bridge
+    messages = []
+    previous = qInstallMessageHandler(lambda kind, context, message: messages.append(message))
+    engine = QQmlApplicationEngine()
+    engine.addImageProvider('project', ProjectImageProvider(b))
+    engine.rootContext().setContextProperty('backend', b)
+    try:
+        engine.load(QUrl.fromLocalFile(str(ROOT / 'substance/qml/Main.qml')))
+        assert engine.rootObjects(), messages
+        w = engine.rootObjects()[0]
+        QTest.qWait(60)
+        def js(code):
+            expression = QQmlExpression(qmlContext(w), w, code)
+            expression.evaluate()
+            assert not expression.hasError(), expression.error().toString()
+            QTest.qWait(40)
+        field = w.findChild(QObject, 'subtitleEditor')
+        field.forceActiveFocus()
+        for ident in ('findDialog', 'shiftDialog', 'leadDialog', 'spellingDialog', 'reviewsDialog', 'characterDialog', 'settingsDialog'):
+            js(ident + '.open()')
+            dialog = w.findChild(QObject, ident)
+            assert dialog.isVisible() and dialog.transientParent() == w
+            assert dialog.title() and dialog.flags() & Qt.WindowType.WindowTitleHint
+            assert not dialog.flags() & Qt.WindowType.FramelessWindowHint
+            # Close belongs to the active auxiliary window, preserving the editor.
+            QTest.keyClick(dialog, Qt.Key.Key_W, Qt.KeyboardModifier.ControlModifier)
+            QTest.qWait(40)
+            assert not dialog.isVisible() and w.isVisible()
+        original_start = b.editor.document.cues[0].start
+        js('shiftDialog.open(); shiftAmount.text = "100"; shiftDialog.reject()')
+        assert b.editor.document.cues[0].start == original_start
+        js('shiftDialog.open(); shiftDialog.accept()')
+        assert b.editor.document.cues[0].start == original_start + 100
+        b.undo()
+        js('settingsDialog.open()')
+        tabs = w.findChild(QObject, 'settingsTabs')
+        for page in range(3):
+            tabs.setProperty('page', page)
+            QTest.qWait(40)
+            assert tabs.property('currentIndex') == page
+        b.save()
+        w.close()
+        QTest.qWait(40)
+        assert not w.isVisible()
+        assert not w.findChild(QObject, 'settingsDialog').isVisible()
+        errors = [m for m in messages if any(s in m for s in ('ReferenceError', 'TypeError', 'Binding loop', 'Cannot assign', 'Unable to assign'))]
+        assert not errors, errors
+    finally:
+        if engine.rootObjects():
+            shiboken6.delete(engine.rootObjects()[0])
+        shiboken6.delete(engine)
+        qInstallMessageHandler(previous)

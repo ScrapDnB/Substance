@@ -2,10 +2,8 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 
-Dialog {
+NativeDialog {
     id: dialog
-    required property var colors
-    popupType: Popup.Item
     property string kind: "note"
     property string entryId: ""
     property string targetField: "text"
@@ -13,10 +11,9 @@ Dialog {
     property string originalBase: ""
     property bool revising: false
     title: kind === "note" ? (entryId ? "Изменить заметку" : "Заметка к реплике") : (entryId ? "Пересмотреть предложение" : "Предложение правки")
-    width: Math.min(680, parent.width - 40)
-    height: Math.min(kind === "note" ? 340 : 620, parent.height - 60)
+    preferredWidth: 680
+    preferredHeight: kind === "note" ? 340 : 620
     modal: true
-    anchors.centerIn: Overlay.overlay
     standardButtons: Dialog.NoButton
     function create(type) {
         if (!backend.ensureProject() || !backend.current.exists) return
@@ -56,18 +53,18 @@ Dialog {
         ScrollView {
             visible: dialog.kind === "proposal"
             Layout.fillWidth: true; Layout.preferredHeight: 90
-            TextArea { text: dialog.sourceText; readOnly: true; wrapMode: TextEdit.Wrap; selectByMouse: true; textFormat: TextEdit.PlainText }
+            DialogTextArea { text: dialog.sourceText; readOnly: true; wrapMode: TextEdit.Wrap; selectByMouse: true; textFormat: TextEdit.PlainText }
         }
         Label { visible: dialog.kind === "proposal"; text: "Предложенный вариант" }
         ScrollView {
             visible: dialog.kind === "proposal"
             Layout.fillWidth: true; Layout.fillHeight: true
-            TextArea { id: replacement; objectName: "proposedText"; wrapMode: TextEdit.Wrap; selectByMouse: true; textFormat: TextEdit.PlainText }
+            DialogTextArea { id: replacement; objectName: "proposedText"; wrapMode: TextEdit.Wrap; selectByMouse: true; textFormat: TextEdit.PlainText }
         }
         Label { text: dialog.kind === "note" ? "Текст заметки" : "Пояснение" }
         ScrollView {
             Layout.fillWidth: true; Layout.fillHeight: dialog.kind === "note"; Layout.preferredHeight: 85
-            TextArea { id: comment; objectName: "reviewComment"; wrapMode: TextEdit.Wrap; selectByMouse: true; textFormat: TextEdit.PlainText }
+            DialogTextArea { id: comment; objectName: "reviewComment"; wrapMode: TextEdit.Wrap; selectByMouse: true; textFormat: TextEdit.PlainText }
         }
         RowLayout {
             Layout.alignment: Qt.AlignRight

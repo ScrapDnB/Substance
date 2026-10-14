@@ -14,6 +14,38 @@ def editor():
     return e
 
 
+def test_keyboard_character_assignment_identity_creation_and_undo():
+    e = editor()
+    cid = e.save_character('', 'ПРАЙД', ['Pride'], 'PRIDE', '', '', '')
+    e.assign_character_name([0], 'прайд')
+    assert e.document.cues[0].character_id == cid
+    assert e.document.cues[0].character == 'ПРАЙД'
+    e.assign_character_name([0], 'pride')
+    assert e.document.cues[0].character_id == cid
+    before = e.document.to_dict()
+    with pytest.raises(ValueError, match='Подтвердите'):
+        e.assign_character_name([0], 'Новое имя')
+    assert e.document.to_dict() == before
+    e.assign_character_name([0], '  Новое имя  ', create=True)
+    assert e.document.cues[0].character == 'Новое имя'
+    assert len(e.document.characters) == len(before['characters']) + 1
+    e.undo()
+    assert e.document.to_dict() == before
+    e.redo()
+    e.assign_character_name([0], '')
+    assert e.document.cues[0].character_id == ''
+    assert e.document.cues[0].character == ''
+
+
+def test_plain_subtitle_character_assignment_does_not_require_project():
+    e = Editor(parse_srt('1\n00:00:01,000 --> 00:00:03,000\nHello\n'))
+    e.assign_character_name([0], 'ПРАЙД', create=True)
+    e.assign_character_name([0], 'прайд')
+    assert e.document.cues[0].character == 'ПРАЙД'
+    assert not e.document.cues[0].character_id
+    assert not e.document.characters
+
+
 def test_v1_migration_preserves_legacy_and_unknown_data():
     data = parse_srt('1\n00:00:00,000 --> 00:00:02,000\nOriginal\n').to_dict()
     data['schema_version'] = 1

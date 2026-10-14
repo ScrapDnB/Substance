@@ -21,6 +21,7 @@ from .tasks import SpellingTask, ExtractTask
 from .timecode import format_time, parse_time, frame_time
 from .platform import reduce_motion
 from .project import sync_characters
+from .shortcuts import LayoutShortcuts
 from .images import load_image, encode_image, decode_image, crop_image
 from PySide6.QtGui import QImage
 import difflib
@@ -33,6 +34,7 @@ SHORTCUTS = {
     "previous": "Alt+Up", "next": "Alt+Down", "play": "Ctrl+Space", "playLine": "Alt+Space",
     "setStart": "Ctrl+1", "setEnd": "Ctrl+2", "frameBack": "Alt+Left", "frameForward": "Alt+Right",
     "shift": "Ctrl+Shift+T", "copyLines": "Ctrl+Shift+C", "pasteLines": "Ctrl+Shift+V", "deleteLines": "Ctrl+Shift+Backspace",
+    "assignCharacter": "Ctrl+`",
 }
 
 
@@ -162,6 +164,9 @@ class Backend(QObject):
         default_shortcuts = {**SHORTCUTS, **({"redo": "Ctrl+Y"} if sys.platform == "win32" else {"play": "Ctrl+Shift+Space"} if sys.platform == "darwin" else {})}
         try:
             self._shortcuts = {**default_shortcuts, **json.loads(self.settings.value("shortcuts", "{}"))}
+            if self._shortcuts.get("assignCharacter") in ("Ctrl+?", "Ctrl+Shift+?"):
+                self._shortcuts["assignCharacter"] = default_shortcuts["assignCharacter"]
+                self.settings.setValue("shortcuts", json.dumps(self._shortcuts))
             self._recents = json.loads(self.settings.value("recents", "[]"))
         except (ValueError, TypeError):
             self._shortcuts, self._recents = default_shortcuts, []
@@ -174,6 +179,7 @@ class Backend(QObject):
         self._autosave_timer.timeout.connect(self.autosave)
         self._autosave_timer.start()
         self.model.rebuild()
+        self.layout_shortcuts = LayoutShortcuts(self)
 
     @Property(QObject, constant=True)
     def cues(self):
@@ -307,6 +313,10 @@ class Backend(QObject):
     @Property(str, notify=preferencesChanged)
     def theme(self):
         return self._theme
+
+    @Property(str, notify=preferencesChanged)
+    def importEncoding(self):
+        return self._encoding
 
     @Property(bool, notify=preferencesChanged)
     def motion(self):
@@ -800,17 +810,25 @@ class Backend(QObject):
 
     @Slot(str)
     def editShortcutDialog(self, action):
+        owner = QGuiApplication.focusWindow()
         dialog = QDialog()
         dialog.setWindowTitle("Горячая клавиша")
+        dialog.setWindowFlag(Qt.WindowType.WindowContextHelpButtonHint, False)
+        dialog.setMinimumWidth(440)
         layout = QVBoxLayout(dialog)
+        layout.setContentsMargins(20, 20, 20, 20)
+        layout.setSpacing(14)
         layout.addWidget(QLabel("Нажмите новое сочетание клавиш"))
         edit = QKeySequenceEdit(QKeySequence(self._shortcuts.get(action, "")))
         edit.setMaximumSequenceLength(1)
         layout.addWidget(edit)
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        buttons.button(QDialogButtonBox.StandardButton.Cancel).setText("Отмена")
         buttons.accepted.connect(dialog.accept)
         buttons.rejected.connect(dialog.reject)
         layout.addWidget(buttons)
+        dialog.winId()
+        dialog.windowHandle().setTransientParent(owner)
         if dialog.exec() == QDialog.DialogCode.Accepted:
             self.setShortcut(action, edit.keySequence().toString(QKeySequence.SequenceFormat.PortableText))
 
@@ -1021,7 +1039,18 @@ class Backend(QObject):
 
     @Slot()
     def about(self):
-        QMessageBox.about(None, "Substance", f"Substance {__version__}\n\nРедактор ASS для тайминга и перевода.\nPython · Qt Quick · FFmpeg · libass\n\nПредварительная версия.\nГорячие клавиши доступны в меню и настройках.")
+        # The static about() helper creates an unowned modeless window on macOS.
+        # Give this dialog the same native ownership/lifetime as other dialogs.
+        owner = QGuiApplication.focusWindow()
+        dialog = QMessageBox()
+        dialog.setWindowTitle("О Substance")
+        dialog.setTextFormat(Qt.TextFormat.PlainText)
+        dialog.setText(f"Substance {__version__}")
+        dialog.setInformativeText("Редактор ASS для тайминга и перевода.\nPython · Qt Quick · FFmpeg · libass\n\nПредварительная версия.\nГорячие клавиши доступны в меню и настройках.")
+        dialog.setStandardButtons(QMessageBox.StandardButton.Ok)
+        dialog.winId()
+        dialog.windowHandle().setTransientParent(owner)
+        dialog.exec()
 
     @Slot(result=bool)
     def requestClose(self):
@@ -1295,6 +1324,20 @@ class Backend(QObject):
         if self.isProject:
             self._guard(lambda: self.editor.assign_character(self._indices(), card_id))
 
+    @Slot(str, result='QVariantList')
+    def characterSuggestions(self, prefix):
+        prefix = prefix.strip().casefold()
+        choices = self.editor.character_choices()
+        matches = [c for c in choices if any(v.casefold().startswith(prefix) for v in [c['name'], *c['aliases']])]
+        return sorted(matches, key=lambda c: (c['name'].casefold() != prefix,
+                                              prefix not in [v.casefold() for v in c['aliases']], c['name'].casefold()))
+
+    @Slot(str, bool, result=bool)
+    def assignCharacterName(self, name, create=False):
+        if not self._indices():
+            return False
+        return self._guard(lambda: self.editor.assign_character_name(self._indices(), name, create=create))
+
     @Slot(str)
     def deleteCharacter(self, card_id):
         if self.isProject and self._guard(lambda: self.editor.delete_character(card_id)):
@@ -1403,6 +1446,7 @@ class Backend(QObject):
                 self.media_controller.seek(portrait['time'])
 
     def shutdown(self):
+        self.layout_shortcuts.detach()
         for name in ("_spelling_task", "_extract_task"):
             task = getattr(self, name, None)
             if task:

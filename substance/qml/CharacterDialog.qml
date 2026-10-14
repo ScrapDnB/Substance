@@ -2,19 +2,15 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 
-Dialog {
+NativeDialog {
     id: dialog
-    required property var colors
-    popupType: Popup.Item
     property bool loading: false
     property bool modified: false
     property string editedId: ""
     title: "Персонажи проекта"
-    width: Math.min(860, parent.width - 40)
-    height: Math.min(760, parent.height - 60)
+    preferredWidth: 860
+    preferredHeight: 760
     modal: false
-    closePolicy: Popup.CloseOnEscape
-    anchors.centerIn: Overlay.overlay
     standardButtons: Dialog.NoButton
     function stage() {
         if (loading) return
@@ -56,14 +52,14 @@ Dialog {
                 clip: true; spacing: 4
                 ScrollBar.vertical: ScrollBar { }
                 model: backend.characterCards
-                delegate: ItemDelegate {
+                delegate: DialogItemDelegate {
                     required property var modelData
                     width: cards.width; height: 56
                     highlighted: dialog.editedId === modelData.id
                     onClicked: dialog.switchCard(modelData.id)
                     contentItem: RowLayout {
                         Image { source: modelData.portraitUrl; Layout.preferredWidth: 40; Layout.preferredHeight: 40; sourceSize.width: 80; sourceSize.height: 80; fillMode: Image.PreserveAspectCrop; visible: source.toString().length > 0 }
-                        Label { text: modelData.name; textFormat: Text.PlainText; elide: Text.ElideRight; Layout.fillWidth: true }
+                        Label { text: modelData.name; color: dialog.editedId === modelData.id ? dialog.colors.selectedText : dialog.colors.text; textFormat: Text.PlainText; elide: Text.ElideRight; Layout.fillWidth: true }
                     }
                 }
             }
@@ -84,19 +80,19 @@ Dialog {
                         ColumnLayout {
                             Layout.fillWidth: true
                             Label { text: "Имя персонажа" }
-                            TextField { id: cardName; objectName: "characterName"; Layout.fillWidth: true; placeholderText: "Имя"; onTextEdited: dialog.stage() }
+                            DialogTextField { id: cardName; objectName: "characterName"; Layout.fillWidth: true; placeholderText: "Имя"; onTextEdited: dialog.stage() }
                             Label { text: "Имя в экспорте"; color: dialog.colors.muted }
-                            TextField { id: exportName; Layout.fillWidth: true; placeholderText: cardName.text; onTextEdited: dialog.stage() }
+                            DialogTextField { id: exportName; Layout.fillWidth: true; placeholderText: cardName.text; onTextEdited: dialog.stage() }
                         }
                     }
                     Label { text: "Альтернативные имена через запятую"; color: dialog.colors.muted }
-                    TextField { id: aliases; Layout.fillWidth: true; onTextEdited: dialog.stage() }
+                    DialogTextField { id: aliases; Layout.fillWidth: true; onTextEdited: dialog.stage() }
                     Label { text: "Описание" }
-                    TextArea { id: description; Layout.fillWidth: true; Layout.preferredHeight: 80; wrapMode: TextEdit.Wrap; selectByMouse: true; textFormat: TextEdit.PlainText; onTextChanged: dialog.stage() }
+                    DialogTextArea { id: description; Layout.fillWidth: true; Layout.preferredHeight: 80; wrapMode: TextEdit.Wrap; selectByMouse: true; textFormat: TextEdit.PlainText; onTextChanged: dialog.stage() }
                     Label { text: "Особенности речи и произношение" }
-                    TextArea { id: speech; Layout.fillWidth: true; Layout.preferredHeight: 80; wrapMode: TextEdit.Wrap; selectByMouse: true; textFormat: TextEdit.PlainText; onTextChanged: dialog.stage() }
+                    DialogTextArea { id: speech; Layout.fillWidth: true; Layout.preferredHeight: 80; wrapMode: TextEdit.Wrap; selectByMouse: true; textFormat: TextEdit.PlainText; onTextChanged: dialog.stage() }
                     Label { text: "Заметки о персонаже" }
-                    TextArea { id: notes; Layout.fillWidth: true; Layout.preferredHeight: 80; wrapMode: TextEdit.Wrap; selectByMouse: true; textFormat: TextEdit.PlainText; onTextChanged: dialog.stage() }
+                    DialogTextArea { id: notes; Layout.fillWidth: true; Layout.preferredHeight: 80; wrapMode: TextEdit.Wrap; selectByMouse: true; textFormat: TextEdit.PlainText; onTextChanged: dialog.stage() }
                     RowLayout {
                         Button { text: "Из видео…"; enabled: backend.media.hasVideo; onClicked: { if (dialog.modified || !dialog.editedId) { if (!dialog.save()) return } backend.capturePortrait(dialog.editedId) } }
                         Button { text: "Из файла…"; onClicked: { if (dialog.modified || !dialog.editedId) { if (!dialog.save()) return } backend.importPortrait(dialog.editedId) } }
@@ -121,7 +117,7 @@ Dialog {
                     Label { text: "Реплики персонажа · " + backend.currentCard.cues.length; font.bold: true }
                     Repeater {
                         model: backend.currentCard.cues
-                        delegate: ItemDelegate { required property var modelData; Layout.fillWidth: true; text: modelData.number + " · " + modelData.time + " · " + modelData.text; onClicked: { backend.selectCueId(modelData.id); dialog.close() } }
+                        delegate: DialogItemDelegate { required property var modelData; Layout.fillWidth: true; text: modelData.number + " · " + modelData.time + " · " + modelData.text; onClicked: { backend.selectCueId(modelData.id); dialog.close() } }
                     }
                 }
             }

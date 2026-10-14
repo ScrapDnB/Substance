@@ -184,6 +184,37 @@ class Editor(ProjectEdits):
                 cue.extras.pop("untimed", None)
         self.transact("Сдвиг времени", apply)
 
+    def character_choices(self):
+        if self.project_mode:
+            return [{'id': c.id, 'name': c.name, 'aliases': list(c.aliases)} for c in self.document.characters]
+        return [{'id': '', 'name': name, 'aliases': []} for name in sorted({c.character for c in self.document.cues if c.character.strip()})]
+
+    def assign_character_name(self, indices, name, *, create=False):
+        name = name.strip()
+        choices = self.character_choices()
+        # Canonical names take precedence over aliases; keep existing identity.
+        matches = [c for c in choices if c['name'] == name]
+        if not matches:
+            matches = [c for c in choices if c['name'].casefold() == name.casefold()]
+        if not matches:
+            matches = [c for c in choices if name.casefold() in [v.casefold() for v in c['aliases']]]
+        if len(matches) > 1:
+            raise ValueError('Имя неоднозначно: выберите персонажа из списка')
+        if name and not matches and not create:
+            raise ValueError('Подтвердите создание нового персонажа')
+        card = matches[0] if matches else None
+        def edit(doc):
+            card_id = card['id'] if card else ''
+            canonical = card['name'] if card else name
+            if name and card is None and self.project_mode:
+                from .project import CharacterCard
+                card_id = identity('char')
+                doc.characters.append(CharacterCard(card_id, name, export_name=name))
+            for i in indices:
+                doc.cues[i].character_id = card_id
+                doc.cues[i].character = canonical
+        return self.transact('Назначение персонажа', edit)
+
     def batch(self, indices: list[int], action: str, value=None) -> None:
         def apply(doc):
             if action == "sort":
