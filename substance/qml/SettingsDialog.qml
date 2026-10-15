@@ -333,6 +333,9 @@ NativeDialog {
                             key: "assignCharacter",
                             name: "Назначить персонажа"
                         },
+                        { key: "formatBold", name: "Жирный текст" },
+                        { key: "formatItalic", name: "Курсив" },
+                        { key: "formatUnderline", name: "Подчёркивание" },
                         {
                             key: "copyLines",
                             name: "Копировать реплики"

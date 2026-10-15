@@ -14,11 +14,17 @@ from PySide6.QtGui import QGuiApplication, QKeySequence
 from PySide6.QtWidgets import QFileDialog, QMessageBox, QInputDialog, QDialog, QDialogButtonBox, QVBoxLayout, QLabel, QKeySequenceEdit
 
 from . import __version__
-from .document import Cue, Document, atomic_write, export_document, identity, load_document, parse_ass, parse_srt, parse_txt, plain_text, save_document
+from .document import Document, atomic_write, export_document, identity, load_document, parse_ass, parse_srt, parse_txt, plain_text, save_document
+from .ass_tags import inventory, remove_document_tags
+from .ass_highlighter import AssHighlighter
+from .ass_formatting import selection_state, toggle_format, style_states
+from .ass_inheritance import inherit_formatting
 from .editor import Editor, quality
+from .repositories import LocalDocumentRepository
+from .online import OnlineController
 from .media import MediaController
 from .tasks import SpellingTask, ExtractTask
-from .timecode import format_time, parse_time, frame_time
+from .timecode import format_time, parse_time
 from .platform import reduce_motion
 from .project import sync_characters
 from .shortcuts import LayoutShortcuts
@@ -35,6 +41,7 @@ SHORTCUTS = {
     "setStart": "Ctrl+1", "setEnd": "Ctrl+2", "frameBack": "Alt+Left", "frameForward": "Alt+Right",
     "shift": "Ctrl+Shift+T", "copyLines": "Ctrl+Shift+C", "pasteLines": "Ctrl+Shift+V", "deleteLines": "Ctrl+Shift+Backspace",
     "assignCharacter": "Ctrl+`",
+    "formatBold": "Ctrl+B", "formatItalic": "Ctrl+I", "formatUnderline": "Ctrl+U",
 }
 
 
@@ -133,6 +140,14 @@ class Backend(QObject):
         self.settings = QSettings(str(self.data_dir / "settings.ini"), QSettings.Format.IniFormat)
         self.recovery_path = self.data_dir / f"recovery-{os.getpid()}.substance"
         self.path = ""
+        self._use_ass_styles = self.settings.value("useAssStyles", False, type=bool)
+        self._ass_style_skeleton = None
+        self._ass_style_states = {}
+        self._ass_highlighters = []
+        self._ass_notice = None
+        self._ass_formatted = self.settings.value("assFormatted", False, type=bool)
+        self._ass_original_formatted = self.settings.value("assOriginalFormatted", self._ass_formatted, type=bool)
+        self._preserve_ass_formatting = self.settings.value("preserveAssFormatting", False, type=bool)
         self._card_id = ""
         self._card_draft = {}
         self._capture_image = QImage()
@@ -150,7 +165,7 @@ class Backend(QObject):
         self._spelling_revision = None
         self._filter, self._search, self._character_filter = "all", "", ""
         self._pattern = None
-        self._preview = self.editor.document.ass_text()
+        self._preview = self.editor.document.ass_text(use_ass_styles=self._use_ass_styles)
         self._message = "Создайте документ или откройте субтитры"
         self._computed_key = None
         self._quality_cache = []
@@ -180,6 +195,160 @@ class Backend(QObject):
         self._autosave_timer.start()
         self.model.rebuild()
         self.layout_shortcuts = LayoutShortcuts(self)
+        self.currentChanged.connect(self._update_ass_styles)
+        self.local_repository = LocalDocumentRepository()
+        self.online = OnlineController(self)
+
+    def _ass_style_context(self):
+        if not self._use_ass_styles:
+            return {}, {}
+        doc = self.editor.document
+        if self._ass_style_skeleton is not doc.skeleton:
+            self._ass_style_skeleton = doc.skeleton
+            self._ass_style_states = style_states(doc.skeleton)
+        name = doc.cues[self._current].ass_fields.get("Style", "Default") if 0 <= self._current < len(doc.cues) else "Default"
+        return self._ass_style_states.get(name, self._ass_style_states.get("Default", {})), self._ass_style_states
+
+    def _update_ass_styles(self):
+        base, styles = self._ass_style_context()
+        for highlighter in self._ass_highlighters:
+            highlighter.base = base
+            highlighter.styles = styles
+            highlighter.rehighlight()
+
+    @Property(bool, notify=preferencesChanged)
+    def useAssStyles(self):
+        return self._use_ass_styles
+
+    @Slot(bool)
+    def setUseAssStyles(self, value):
+        if value == self._use_ass_styles or not self.flush():
+            return
+        self._use_ass_styles = value
+        self.settings.setValue("useAssStyles", value)
+        self._update_ass_styles()
+        self.preferencesChanged.emit()
+        self.changed.emit()
+        self._preview_timer.start()
+
+    @Slot(str, int, int, result='QVariantMap')
+    def assFormattingState(self, text, start, end):
+        return selection_state(text, start, end, *self._ass_style_context())
+
+    @Slot(str, int, int, str, result='QVariantMap')
+    def applyAssFormat(self, text, start, end, kind):
+        if self._busy or not self.flush() or not self.current.get("exists"):
+            return {}
+        prepared = self.prepareTranslationFormatting(text, start, end, end)
+        text, start, end = prepared["text"], prepared["start"], prepared["end"]
+        if text != self.current["editText"]:
+            self.show_error("Текст реплики изменился; повторите оформление")
+            return {}
+        try:
+            result = toggle_format(text, start, end, kind, *self._ass_style_context())
+        except ValueError as exc:
+            self.show_error(str(exc))
+            return {}
+        cue = self.editor.document.cues[self._current]
+        key = "translation" if self._mode == "translation" or cue.translation is not None else "text"
+        if not self._guard(lambda: self.editor.update(self._current, **{key: result["text"].replace("\n", r"\N")}), current=False):
+            return {}
+        return result
+
+    @Property(bool, notify=preferencesChanged)
+    def assFormatted(self):
+        return self._ass_formatted
+
+    @Slot(bool)
+    def setAssFormatted(self, value):
+        self._ass_formatted = value
+        self.settings.setValue("assFormatted", value)
+        for highlighter in self._ass_highlighters:
+            if not highlighter.original and highlighter.document() is not None:
+                highlighter.formatted = value
+                highlighter.rehighlight()
+        self.preferencesChanged.emit()
+
+    @Property(bool, notify=preferencesChanged)
+    def assOriginalFormatted(self):
+        return self._ass_original_formatted
+
+    @Slot(bool)
+    def setAssOriginalFormatted(self, value):
+        self._ass_original_formatted = value
+        self.settings.setValue("assOriginalFormatted", value)
+        for highlighter in self._ass_highlighters:
+            if highlighter.original and highlighter.document() is not None:
+                highlighter.formatted = value
+                highlighter.rehighlight()
+        self.preferencesChanged.emit()
+
+    @Slot(str, int, int, int, result='QVariantMap')
+    def prepareTranslationFormatting(self, text, start, end, cursor):
+        if self._preserve_ass_formatting and self._mode == "translation" and 0 <= self._current < self.count:
+            return inherit_formatting(self.editor.document.cues[self._current].original, text, start, end, cursor)
+        return {"text": text, "start": start, "end": end, "cursor": cursor}
+
+    @Property(bool, notify=preferencesChanged)
+    def preserveAssFormatting(self):
+        return self._preserve_ass_formatting
+
+    @Slot(bool)
+    def setPreserveAssFormatting(self, value):
+        if not self.flush():
+            return
+        self._preserve_ass_formatting = value
+        self.settings.setValue("preserveAssFormatting", value)
+        self.preferencesChanged.emit()
+
+    @Slot(QObject)
+    @Slot(QObject, bool)
+    def attachAssDocument(self, quick_document, original=False):
+        highlighter = AssHighlighter(quick_document.textDocument(), self._ass_original_formatted if original else self._ass_formatted)
+        highlighter.original = original
+        highlighter.base, highlighter.styles = self._ass_style_context()
+        self._ass_highlighters.append(highlighter)
+        highlighter.rehighlight()
+        quick_document.destroyed.connect(lambda: self._ass_highlighters.remove(highlighter) if highlighter in self._ass_highlighters else None)
+
+    @Property('QVariantList', notify=changed)
+    def assTags(self):
+        return inventory(c.output_text for c in self.editor.document.cues)
+
+    @Slot('QVariantList', result=bool)
+    def removeAssTags(self, names):
+        if not names:
+            return False
+        return self._guard(lambda: remove_document_tags(self.editor, set(names)))
+
+    def _warn_ass(self, path, *, sidecar=False, originals=False):
+        if Path(path).suffix.lower() not in (".ass", ".ssa"):
+            return
+        if self._ass_notice is not None:
+            self._ass_notice.close()
+        notice = QMessageBox()
+        notice.setIcon(QMessageBox.Icon.Warning)
+        notice.setWindowTitle("Сохранение ASS")
+        notice.setText("ASS содержит только " + ("оригинальный" if originals else "итоговый") + " текст субтитров.")
+        detail = "Оригинал и перевод вместе сохраняются только в формате .substance. При повторном открытии одного ASS восстановить обе версии нельзя."
+        if sidecar:
+            detail += "\n\nДанные оригинала сохранены рядом: " + Path(path).name + ".substance. Не удаляйте этот файл."
+        else:
+            detail += "\n\nСохраните проект .substance, чтобы сохранить оригинал, перевод и данные проекта."
+        notice.setInformativeText(detail)
+        notice.setStandardButtons(QMessageBox.StandardButton.Ok)
+        self._ass_notice = notice
+        # Own the native warning and attach it to the QML application window.
+        for window in QGuiApplication.topLevelWindows():
+            if window.objectName() == "substanceWindow":
+                notice.winId()
+                notice.windowHandle().setTransientParent(window)
+                break
+        notice.open()
+
+    @Property(QObject, constant=True)
+    def onlineSession(self):
+        return self.online
 
     @Property(QObject, constant=True)
     def cues(self):
@@ -207,6 +376,8 @@ class Backend(QObject):
 
     @Property(str, notify=changed)
     def title(self):
+        if self.online.active:
+            return self.online.context.get("episode_name", "Онлайн-серия")
         return Path(self.path).name if self.path else "Новые субтитры"
 
     @Property(str, notify=changed)
@@ -427,7 +598,12 @@ class Backend(QObject):
         cues = self.editor.document.cues
         self._quality_cache = [quality(c, next_cue=cues[i + 1] if i + 1 < len(cues) else None, cps_limit=self.cpsLimit, line_limit=self.lineLimit, line_count_limit=self.reviewSettings["lineCountLimit"], show_length=self.reviewSettings["lineLength"], show_speed=self.reviewSettings["readingSpeed"], show_lines=self.reviewSettings["lineCount"]) for i, c in enumerate(cues)]
         self._review_counts = {}
-        if self.isProject:
+        if self.online.active:
+            for entry in self.online.reviews.entries:
+                if entry["state"] == "open":
+                    review_key = (entry["cue_id"], entry["kind"])
+                    self._review_counts[review_key] = self._review_counts.get(review_key, 0) + 1
+        elif self.isProject:
             for entry in self.editor.document.reviews:
                 if entry.state == 'open':
                     for cue_id in entry.cue_ids:
@@ -459,6 +635,8 @@ class Backend(QObject):
         self._current = min(self._current, self.count - 1)
         self.selection = {i for i in self.selection if i < self.count}
         self.model.rebuild()
+        if hasattr(self, "online") and not self.online.checkpoint():
+            self.show_error(self.online.status)
         self.changed.emit()
         if current:
             self.currentChanged.emit()
@@ -500,6 +678,8 @@ class Backend(QObject):
         if key == "text":
             key = "translation" if self._mode == "translation" or cue.translation is not None else "text"
             value = value.replace("\n", r"\N")
+            if key == "translation" and self._mode == "translation" and self._preserve_ass_formatting:
+                value = inherit_formatting(cue.original, value)["text"]
         original = getattr(cue, key, None)
         if key in ("start", "end"):
             original = format_time(original)
@@ -537,7 +717,7 @@ class Backend(QObject):
             for key, value in self.draft.items():
                 if key not in ("start", "end"):
                     setattr(doc.cues[self._current], key, value)
-        self._preview = doc.ass_text()
+        self._preview = doc.ass_text(use_ass_styles=self._use_ass_styles)
         self.previewChanged.emit()
         self.playbackChanged.emit()
 
@@ -867,8 +1047,13 @@ class Backend(QObject):
         self._guard(lambda: self.editor.transact("Настройки документа", apply))
 
     def _confirm_unsaved(self):
+        if self.online.busy:
+            self.show_error("Дождитесь завершения онлайн-запроса")
+            return False
         if not self.flushCard() or not self.flush():
             return False
+        if self.online.active:
+            return self.online.checkpoint()
         if not self.dirty:
             return True
         answer = QMessageBox.question(None, "Сохранить изменения?", f"В «{self.title}» есть несохранённые изменения.", QMessageBox.StandardButton.Save | QMessageBox.StandardButton.Discard | QMessageBox.StandardButton.Cancel, QMessageBox.StandardButton.Save)
@@ -883,6 +1068,8 @@ class Backend(QObject):
             self.media_controller.clear()
 
     def _set_document(self, document, path):
+        if hasattr(self, "online"):
+            self.online.disconnect()
         self.documentReplaced.emit()
         self._card_draft = {}
         self.editor = Editor(document)
@@ -947,10 +1134,16 @@ class Backend(QObject):
     def save(self):
         if not self.flushCard() or not self.flush():
             return False
+        if self.online.active:
+            saved = self.online.checkpoint()
+            if saved:
+                self.online.sync()
+            return saved
         if not self.path:
             return self.saveAs()
         try:
-            save_document(self.editor.document, self.path)
+            self.local_repository.save(self.editor.document, self.path, use_ass_styles=self._use_ass_styles)
+            self._warn_ass(self.path, sidecar=True)
             self.editor.mark_saved()
             self._remove_recovery()
             self.notify("Сохранено")
@@ -971,8 +1164,18 @@ class Backend(QObject):
             path += ".substance" if "Substance" in selected else ".ass"
         if self.isProject and Path(path).suffix.lower() != '.substance':
             try:
-                export_document(self.editor.document, path)
+                export_document(self.editor.document, path, use_ass_styles=self._use_ass_styles)
+                self._warn_ass(path)
                 self.notify('ASS экспортирован; работа продолжается в проекте')
+                return True
+            except (ValueError, OSError) as exc:
+                self.show_error(str(exc))
+                return False
+        if self.online.active:
+            try:
+                export_document(self.editor.document, path, use_ass_styles=self._use_ass_styles)
+                self._warn_ass(path)
+                self.notify("Автономная копия сохранена; онлайн-серия остаётся открытой")
                 return True
             except (ValueError, OSError) as exc:
                 self.show_error(str(exc))
@@ -996,7 +1199,8 @@ class Backend(QObject):
                 self.save()
                 return
             try:
-                export_document(self.editor.document, path, originals=originals)
+                export_document(self.editor.document, path, originals=originals, use_ass_styles=self._use_ass_styles)
+                self._warn_ass(path, originals=originals)
                 self.notify("Экспорт завершён")
             except (ValueError, OSError) as exc:
                 self.show_error(str(exc))
@@ -1054,10 +1258,35 @@ class Backend(QObject):
 
     @Slot(result=bool)
     def requestClose(self):
+        if self.online.active:
+            if not self.flushCard() or not self.flush() or not self.online.checkpoint():
+                return False
+            return self.online.request_close()
         if self._confirm_unsaved():
             self._remove_recovery()
             return True
         return False
+
+    def confirm_online_close(self, error):
+        dialog = QMessageBox()
+        dialog.setWindowTitle("Последние правки ещё не на сервере")
+        dialog.setText("Полный черновик сохранён на этом компьютере. DubbingManager пока показывает последнюю подтверждённую версию.")
+        dialog.setInformativeText(str(error))
+        retry = dialog.addButton("Повторить отправку", QMessageBox.ButtonRole.AcceptRole)
+        local = dialog.addButton("Закрыть с локальным черновиком", QMessageBox.ButtonRole.ActionRole)
+        dialog.addButton("Отмена", QMessageBox.ButtonRole.RejectRole)
+        dialog.setDefaultButton(retry)
+        owner = QGuiApplication.focusWindow()
+        if owner:
+            dialog.winId()
+            dialog.windowHandle().setTransientParent(owner)
+        dialog.exec()
+        if dialog.clickedButton() is retry:
+            self.online.retry_close()
+        elif dialog.clickedButton() is local:
+            self.online.close_locally()
+        else:
+            self.online.cancel_close()
 
     def _remove_recovery(self):
         try:
@@ -1067,6 +1296,10 @@ class Backend(QObject):
 
     @Slot()
     def autosave(self):
+        if self.online.active:
+            if self.flush():
+                self.online.checkpoint()
+            return
         if not self.dirty:
             return
         data = self.editor.document.to_dict()
@@ -1118,7 +1351,7 @@ class Backend(QObject):
 
     @Property(bool, notify=changed)
     def isProject(self):
-        return bool(self.path and Path(self.path).suffix.lower() == '.substance' and not self.path.lower().endswith(('.ass.substance', '.ssa.substance')))
+        return bool(getattr(self, 'online', None) and self.online.active) or bool(self.path and Path(self.path).suffix.lower() == '.substance' and not self.path.lower().endswith(('.ass.substance', '.ssa.substance')))
 
     @Property('QVariantMap', notify=changed)
     def reviewSettings(self):
@@ -1165,7 +1398,10 @@ class Backend(QObject):
 
     def _card_view(self, card):
         result = asdict(card)
-        result['portraits'] = [{**p, 'url': 'image://project/' + p['image']} for p in card.portraits]
+        result['portraits'] = [{**p, 'url': 'image://project/' + p['image'],
+                               'media_path': p.get('media_path', ''),
+                               'time': p.get('time', p.get('frame', {}).get('time_ms', 0))}
+                              for p in card.portraits]
         primary = next((p for p in card.portraits if p['id'] == card.primary), None)
         result['portraitUrl'] = 'image://project/' + primary['image'] if primary else ''
         result['cues'] = [{'id': c.id, 'number': i+1, 'time': format_time(c.start), 'text': plain_text(c.output_text)} for i, c in enumerate(self.editor.document.cues) if c.character_id == card.id]
@@ -1199,7 +1435,8 @@ class Backend(QObject):
                 raise ValueError('Для самостоятельного проекта выберите имя без .ass.substance или .ssa.substance')
             if Path(path).suffix.lower() == '.substance':
                 self.editor.transact('Подготовка проекта', sync_characters)
-            save_document(self.editor.document, path)
+            save_document(self.editor.document, path, use_ass_styles=self._use_ass_styles)
+            self._warn_ass(path, sidecar=True)
             self.path = path
             self.editor.project_mode = self.isProject
             self.editor.mark_saved()
@@ -1234,6 +1471,8 @@ class Backend(QObject):
 
     @Slot()
     def openReviews(self):
+        if self.online.active:
+            self.online.reviews.refresh()
         if self.ensureProject():
             self.reviewsRequested.emit()
 
@@ -1253,6 +1492,8 @@ class Backend(QObject):
 
     @Slot(str, str, str, result=bool)
     def addReview(self, kind, text, replacement):
+        if self.online.active:
+            return self.online.reviews.create(kind, text, replacement)
         if kind not in ('note', 'proposal') or not self.ensureProject() or self._current < 0:
             return False
         cue = self.editor.document.cues[self._current]
@@ -1398,6 +1639,11 @@ class Backend(QObject):
                 source_key, source_data = encode_image(self._capture_image, source=True)
             image_key, image_data = encode_image(cropped)
             portrait = {'id': self._capture_meta.get('portraitId') or identity('portrait'), 'source': source_key, 'image': image_key, 'crop': crop, 'media_path': self._capture_meta.get('media_path', ''), 'time': self._capture_meta.get('time', 0), 'make_primary': primary}
+            if self.online.active:
+                portrait['frame'] = self._capture_meta.get('frame', {})
+                portrait['time'] = self._capture_meta.get('time', portrait['frame'].get('time_ms', 0))
+                return self.online.glossary_session.save_portrait(
+                    card_id, new_name, portrait, {source_key: source_data, image_key: image_data})
             # Character creation and its first portrait form one undoable operation.
             def edit(doc):
                 from .project import CharacterCard
@@ -1428,6 +1674,9 @@ class Backend(QObject):
 
     @Slot(str, str, str)
     def portraitAction(self, card_id, portrait_id, action):
+        if self.online.active:
+            self.online.glossary_session.portrait_action(card_id, portrait_id, action)
+            return
         if self.isProject:
             self._guard(lambda: self.editor.portrait_action(card_id, portrait_id, action))
 
@@ -1446,6 +1695,9 @@ class Backend(QObject):
                 self.media_controller.seek(portrait['time'])
 
     def shutdown(self):
+        if self._ass_notice is not None:
+            self._ass_notice.close()
+        self.online.shutdown()
         self.layout_shortcuts.detach()
         for name in ("_spelling_task", "_extract_task"):
             task = getattr(self, name, None)

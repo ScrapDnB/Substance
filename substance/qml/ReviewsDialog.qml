@@ -6,13 +6,14 @@ NativeDialog {
     id: dialog
     signal composeRequested(string kind)
     signal editRequested(var entry)
-    title: "Заметки и предложения правок"
+    title: backend.onlineSession.active ? "Общие замечания серии" : "Заметки и предложения правок"
     preferredWidth: 800
     preferredHeight: 740
     modal: true
     standardButtons: Dialog.Close
     ColumnLayout {
         anchors.fill: parent
+        visible: !backend.onlineSession.active
         RowLayout {
             Layout.fillWidth: true
             SegmentedSelector { id: scope; Layout.fillWidth: true; property int selectedScope: 0; labels: ["Текущая реплика", "Все записи"]; selectedIndex: selectedScope; onActivated: index => selectedScope = index }
@@ -64,5 +65,12 @@ NativeDialog {
             }
             Label { anchors.centerIn: parent; visible: records.count === 0; text: "Записей пока нет"; color: dialog.colors.muted }
         }
+    }
+    OnlineReviewList {
+        anchors.fill: parent
+        visible: backend.onlineSession.active
+        colors: dialog.colors
+        onComposeRequested: kind => dialog.composeRequested(kind)
+        onRespondRequested: (entry, state) => dialog.editRequested({onlineReply: true, entry: entry, state: state})
     }
 }

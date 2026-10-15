@@ -12,6 +12,7 @@ import re
 import tempfile
 
 from .timecode import parse_time, format_time
+from .ass_formatting import neutral_style_flags
 from . import __version__
 from .project import ReviewEntry, CharacterCard, record_from_dict, validate_project
 
@@ -132,7 +133,7 @@ class Document:
                 raise ValueError("Реплика ссылается на отсутствующую исходную строку")
         validate_project(self)
 
-    def ass_text(self) -> str:
+    def ass_text(self, *, use_ass_styles=True) -> str:
         result: list[str | Cue] = []
         cursor = 0
         last_slot = max((i for i, line in enumerate(self.skeleton) if line is None), default=-1)
@@ -170,14 +171,16 @@ class Document:
                     section = entry.strip().lower()
                 if section == "[events]" and entry.strip().lower().startswith("format:"):
                     active_order = [s.strip() for s in entry.split(":", 1)[1].split(",")]
+        if not use_ass_styles:
+            serialized = neutral_style_flags(serialized)
         return self.newline.join(serialized) + (self.newline if self.trailing_newline else "")
 
-    def ass_bytes(self) -> bytes:
+    def ass_bytes(self, *, use_ass_styles=True) -> bytes:
         encoding = self.encoding
         if encoding == "utf-8" and self.bom:
             encoding = "utf-8-sig"
         try:
-            return self.ass_text().encode(encoding)
+            return self.ass_text(use_ass_styles=use_ass_styles).encode(encoding)
         except UnicodeEncodeError as exc:
             raise ValueError("Новые символы нельзя сохранить в исходной кодировке. Выберите UTF-8 в настройках документа.") from exc
 
@@ -358,7 +361,7 @@ def atomic_write(path: str | Path, data: bytes) -> None:
             os.unlink(temporary)
 
 
-def save_document(doc: Document, path: str | Path) -> None:
+def save_document(doc: Document, path: str | Path, *, use_ass_styles=True) -> None:
     doc.validate()
     path = Path(path)
     if path.suffix.lower() == ".substance":
@@ -367,7 +370,7 @@ def save_document(doc: Document, path: str | Path) -> None:
             raise ValueError("Проект больше 100 МБ. Удалите ненужные изображения.")
         atomic_write(path, data)
     else:
-        data = doc.ass_bytes()
+        data = doc.ass_bytes(use_ass_styles=use_ass_styles)
         sidecar = doc.to_dict(project_data=False)
         sidecar["ass_sha256"] = hashlib.sha256(data).hexdigest()
         # Sidecar first: a failed ASS write cannot make a mismatching translation load.
@@ -375,7 +378,7 @@ def save_document(doc: Document, path: str | Path) -> None:
         atomic_write(path, data)
 
 
-def export_document(doc: Document, path: str | Path, *, originals: bool = False) -> None:
+def export_document(doc: Document, path: str | Path, *, originals: bool = False, use_ass_styles=True) -> None:
     path = Path(path)
     doc = deepcopy(doc)
     cards = {c.id: c for c in doc.characters}
@@ -387,7 +390,7 @@ def export_document(doc: Document, path: str | Path, *, originals: bool = False)
             cue.text, cue.translation = cue.original, None
     suffix = path.suffix.lower()
     if suffix == ".ass":
-        atomic_write(path, doc.ass_bytes())
+        atomic_write(path, doc.ass_bytes(use_ass_styles=use_ass_styles or originals))
     elif suffix in (".srt", ".vtt"):
         blocks = []
         for cue in doc.cues:

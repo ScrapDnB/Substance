@@ -7,7 +7,7 @@ import sys
 import json
 
 from PySide6.QtCore import QObject, QTimer, QUrl, Qt, QEvent, Signal
-from PySide6.QtGui import QGuiApplication, QIcon
+from PySide6.QtGui import QIcon
 from PySide6.QtQml import QQmlApplicationEngine
 from PySide6.QtQuickControls2 import QQuickStyle
 from PySide6.QtWidgets import QApplication
@@ -15,8 +15,9 @@ import shiboken6
 
 from . import __version__
 from .backend import Backend
-from . import visuals  # Registers the Substance QML module.
+from . import visuals  # noqa: F401 - registers the Substance QML module.
 from .macos import MacOSIntegration
+from .stdio import binary_stdio
 
 
 class DesktopApplication(QApplication):
@@ -25,9 +26,15 @@ class DesktopApplication(QApplication):
     def __init__(self, argv):
         self.pending_files = []
         self.accept_files = False
+        self.main_window = None
         super().__init__(argv)
 
     def event(self, event):
+        if event.type() == QEvent.Type.Quit and self.main_window and self.main_window.isVisible():
+            # Dock/system Quit must use the same save/acknowledgement path as X.
+            self.main_window.close()
+            event.ignore()
+            return True
         if event.type() == QEvent.Type.FileOpen:
             path = event.file()
             if not path or Path(path).suffix.lower() not in ('.ass', '.ssa', '.srt', '.vtt', '.txt', '.substance'):
@@ -50,7 +57,30 @@ def main():
     parser.add_argument("--select", type=int, default=1, help="Select a subtitle line (one-based)")
     parser.add_argument("--seek", type=int, default=0, help="Initial media position in milliseconds")
     parser.add_argument("--diagnostics", help="Write runtime diagnostics before exiting")
+    parser.add_argument("--online-capabilities", action="store_true")
+    parser.add_argument("--online-stdin", action="store_true")
+    parser.add_argument("--online-resume", action="store_true")
     args = parser.parse_args()
+    if args.online_capabilities:
+        from .repositories import online_client
+        online_client()
+        stream = binary_stdio(sys.stdout, output=True)
+        stream.write(json.dumps({"protocol": 1, "document_schema": 1, "version": __version__, "capabilities": ["document_cas_v1"]}).encode("utf-8"))
+        stream.flush()
+        return 0
+    launch = None
+    if args.online_stdin:
+        raw = binary_stdio(sys.stdin).read(16385)
+        if len(raw) > 16384:
+            return 2
+        launch = json.loads(raw)
+        if not isinstance(launch, dict) or args.file:
+            return 2
+        if "media_path" in launch and not isinstance(launch["media_path"], str):
+            return 2
+        for field in ("server_url", "project_id", "episode_id", "episode_name", "code"):
+            if not isinstance(launch.get(field), str) or not launch[field]:
+                return 2
     app = DesktopApplication([sys.argv[0]])
     app.setApplicationName("Substance")
     app.setOrganizationName("ScrapDnB")
@@ -71,6 +101,7 @@ def main():
         backend.shutdown()
         return 1
     window = engine.rootObjects()[0]
+    app.main_window = window
     chrome.configure(window)
     app.fileRequested.connect(backend.openPath)
     app.accept_files = True
@@ -78,7 +109,11 @@ def main():
         QTimer.singleShot(0, lambda path=pending_file: backend.openPath(path))
     if args.translation:
         backend.setMode("translation")
-    if args.file:
+    if launch:
+        QTimer.singleShot(0, lambda: backend.online.connect(launch))
+    elif args.online_resume:
+        QTimer.singleShot(0, backend.online.resume)
+    elif args.file:
         # Startup read is synchronous so automated captures cannot race document loading.
         from .document import load_document
         try:
@@ -116,6 +151,9 @@ def main():
                   "videoFrameValid": bool(backend.media_controller._sink and backend.media_controller._sink.videoFrame().isValid()),
                   "audioBins": len(backend.media_controller.peaks), "spectrumShape": list(backend.media_controller.spectrum.shape), "keyframes": backend.media_controller.keyframeCount}
         report.update(chrome.diagnostics(window))
+        report["online"] = {"active": backend.online.active, "pending": backend.online.pending,
+                            "revision": backend.online.revision,
+                            "sessionProtected": backend.online._session_persisted}
         Path(args.diagnostics).write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding='utf-8')
     # Explicitly release the QML tree while its context and media still exist.
     window.hide()
@@ -123,6 +161,7 @@ def main():
     if sidebar:
         sidebar.detach()
     chrome.detach()
+    app.main_window = None
     shiboken6.delete(window)
     shiboken6.delete(engine)
     backend.shutdown()

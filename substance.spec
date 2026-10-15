@@ -70,7 +70,7 @@ if sys.platform == "win32":
             pe.close()
 
 a = Analysis([str(root / "run.py")], pathex=[str(root)], binaries=binaries, datas=datas,
-    hiddenimports=["PySide6.QtSvg", "substance.visuals", "spellchecker"],
+    hiddenimports=["PySide6.QtSvg", "substance.visuals", "spellchecker", "dubbing_online_client.api", "dubbing_online_client.documents", "dubbing_online_client.repository", "dubbing_online_client.credentials", "keyring.backends.macOS" if sys.platform == "darwin" else "keyring.backends.Windows"],
     excludes=["tkinter", "_tkinter", "PySide6.QtWebEngineCore", "PySide6.QtWebEngineQuick", "PySide6.QtWebEngineWidgets", "PySide6.QtCharts", "PySide6.QtDataVisualization", "PySide6.Qt3DCore", "PySide6.Qt3DExtras", "PySide6.QtDesigner"],
     noarchive=False)
 pyz = PYZ(a.pure)

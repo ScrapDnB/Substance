@@ -14,8 +14,8 @@ ApplicationWindow {
     property bool startupChromeReady: true
     readonly property bool nativeToolbar: macOSIntegration !== null && macOSIntegration.nativeToolbarActive
     readonly property bool modalOpen: settingsDialog.visible || spellingDialog.visible || findDialog.visible
-                                     || shiftDialog.visible || leadDialog.visible || actorDialog.visible
-                                     || reviewsDialog.visible || reviewCompose.visible || characterDialog.visible || portraitCropDialog.visible
+                                     || assTagsDialog.visible || shiftDialog.visible || leadDialog.visible || actorDialog.visible
+                                     || onlineConflictDialog.visible || onlineGlossaryDialog.visible || onlineWorkflowDialog.visible || reviewsDialog.visible || reviewCompose.visible || characterDialog.visible || portraitCropDialog.visible
     visible: startupChromeReady
     title: (backend.dirty ? "● " : "") + backend.title + " — Substance"
     font.pixelSize: 13
@@ -51,7 +51,11 @@ ApplicationWindow {
     color: colors.surface
 
     function closeAuxiliaryWindows() {
+        assTagsDialog.close()
         notification.close()
+        onlineConflictDialog.close()
+        onlineGlossaryDialog.close()
+        onlineWorkflowDialog.close()
         reviewCompose.close()
         portraitCropDialog.close()
         actorDialog.close()
@@ -66,6 +70,10 @@ ApplicationWindow {
     onClosing: close => {
         close.accepted = backend.requestClose()
         if (close.accepted) closeAuxiliaryWindows()
+    }
+    Connections {
+        target: backend.onlineSession
+        function onCloseReady() { window.close() }
     }
     Connections {
         target: window.macOSIntegration
@@ -112,6 +120,7 @@ ApplicationWindow {
             title: "Файл"
             MenuItem { action: newAction }
             MenuItem { action: openAction }
+            MenuItem { text: "Продолжить онлайн-серию"; enabled: !backend.onlineSession.active && !backend.onlineSession.busy && backend.onlineSession.canResume; onTriggered: backend.onlineSession.resume() }
             Menu {
                 id: recentMenu
                 title: "Недавние файлы"
@@ -142,7 +151,22 @@ ApplicationWindow {
             MenuSeparator { }
             MenuItem { action: findAction }
             MenuItem { action: replaceAction }
-            MenuItem { text: "Заметки и предложения…"; onTriggered: backend.openReviews() }
+            MenuItem {
+                objectName: "useAssStylesMenuItem"
+                text: "Учитывать стили ASS"
+                checkable: true
+                checked: backend.useAssStyles
+                onTriggered: backend.setUseAssStyles(checked)
+            }
+            MenuItem {
+                objectName: "preserveAssFormattingMenuItem"
+                text: "Сохранять оформление"
+                checkable: true
+                checked: backend.preserveAssFormatting
+                onTriggered: backend.setPreserveAssFormatting(checked)
+            }
+            MenuItem { text: "Удалить ASS-теги…"; enabled: backend.count > 0 && !backend.busy; onTriggered: { if (backend.flush()) assTagsDialog.open() } }
+            MenuItem { text: "Заметки и предложения…"; enabled: !backend.onlineSession.active; onTriggered: backend.openReviews() }
             MenuItem { text: "Персонажи проекта…"; onTriggered: backend.openCharacters("") }
             MenuItem { text: "Проверить орфографию…"; onTriggered: spellingDialog.open() }
             MenuSeparator { }
@@ -210,7 +234,7 @@ ApplicationWindow {
             spacing: 10
             ControlButton { symbol: "sidebar"; onClicked: window.sidebarVisible = !window.sidebarVisible; hint: "Показать или скрыть боковую панель" }
             Label { text: backend.title; font.bold: true; font.pixelSize: 14; color: window.colors.text; elide: Text.ElideRight; Layout.maximumWidth: 280 }
-            Label { text: backend.dirty ? "Изменено" : "✓ Сохранено"; color: backend.dirty ? window.colors.muted : window.colors.success; font.pixelSize: 11 }
+            Label { text: backend.onlineSession.active ? (backend.dirty ? "Изменено" : backend.onlineSession.pending ? "На компьютере" : "На сервере") : backend.dirty ? "Изменено" : "✓ Сохранено"; color: backend.dirty ? window.colors.muted : window.colors.success; font.pixelSize: 11 }
             Item { Layout.fillWidth: true }
             SegmentedSelector {
                 id: modeTabs
@@ -390,11 +414,33 @@ ApplicationWindow {
     }
 
     footer: Rectangle {
-        height: 30
+        height: backend.onlineSession.active ? 66 : 30
         color: window.colors.header
         Rectangle { width: parent.width; height: 1; color: window.colors.border }
         RowLayout {
-            anchors.fill: parent
+            id: onlineStatus
+            visible: backend.onlineSession.active
+            anchors.top: parent.top
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.margins: 6
+            height: 30
+            Label { text: backend.onlineSession.status; Layout.fillWidth: true; elide: Text.ElideRight; color: window.colors.text; font.pixelSize: 11 }
+            Button { objectName: "onlineCompareButton"; text: "Сравнить версии…"; visible: backend.onlineSession.conflictSession.available; enabled: !backend.onlineSession.busy; onClicked: onlineConflictDialog.open() }
+            Button { objectName: "onlineGlossaryButton"; text: "Глоссарий…"; visible: backend.onlineSession.glossarySession.supported; onClicked: onlineGlossaryDialog.open() }
+            Button { text: "Повторить"; enabled: !backend.onlineSession.busy; onClicked: backend.onlineSession.retry() }
+            Button { text: "Начать перевод"; visible: backend.onlineSession.canStartTranslation; enabled: !backend.onlineSession.busy; onClicked: backend.onlineSession.workflow("start_translation", "") }
+            Button { text: "Сдать перевод"; visible: backend.onlineSession.canSubmit; enabled: !backend.onlineSession.busy && !backend.onlineSession.pending; onClicked: backend.onlineSession.workflow("submit_translation", "") }
+            Button { text: "Начать редактуру"; visible: backend.onlineSession.canReview; enabled: !backend.onlineSession.busy && !backend.onlineSession.pending; onClicked: backend.onlineSession.workflow("start_review", "") }
+            Button { text: "Вернуть на доработку…"; visible: backend.onlineSession.canReturn; enabled: !backend.onlineSession.busy && !backend.onlineSession.pending && !backend.onlineSession.reviewSession.pending; onClicked: onlineWorkflowDialog.beginAction("return") }
+            Button { text: "Переоткрыть…"; visible: backend.onlineSession.canReopenWork; enabled: !backend.onlineSession.busy && !backend.onlineSession.pending && !backend.onlineSession.reviewSession.pending; onClicked: onlineWorkflowDialog.beginAction("reopen") }
+            Button { text: "Принять"; visible: backend.onlineSession.canAccept; enabled: !backend.onlineSession.busy && !backend.onlineSession.pending; onClicked: backend.onlineSession.workflow("accept", "") }
+        }
+        RowLayout {
+            anchors.bottom: parent.bottom
+            anchors.left: parent.left
+            anchors.right: parent.right
+            height: 30
             anchors.leftMargin: 12
             anchors.rightMargin: 12
             spacing: 16
@@ -414,6 +460,9 @@ ApplicationWindow {
             else backend.openPath(path)
         }
     }
+    OnlineConflictDialog { id: onlineConflictDialog; objectName: "onlineConflictDialog"; colors: window.colors }
+    OnlineGlossaryDialog { id: onlineGlossaryDialog; objectName: "onlineGlossaryDialog"; colors: window.colors }
+    OnlineWorkflowDialog { id: onlineWorkflowDialog; objectName: "onlineWorkflowDialog"; colors: window.colors }
     ReviewCompose { id: reviewCompose; objectName: "reviewComposeDialog"; transientParent: reviewsDialog.visible ? reviewsDialog : window; colors: window.colors }
     ReviewsDialog { id: reviewsDialog; objectName: "reviewsDialog"; colors: window.colors; onComposeRequested: kind => reviewCompose.create(kind); onEditRequested: entry => reviewCompose.edit(entry) }
     CharacterDialog { id: characterDialog; objectName: "characterDialog"; colors: window.colors }
@@ -421,9 +470,16 @@ ApplicationWindow {
     Connections {
         target: backend
         function onReviewsRequested() { reviewsDialog.open() }
-        function onCardsRequested(cardId) { characterDialog.open(); characterDialog.reload() }
+        function onCardsRequested(cardId) {
+            if (backend.onlineSession.active && backend.onlineSession.glossarySession.supported) {
+                let session = backend.onlineSession.glossarySession
+                if (!session.draft.data && cardId) session.begin(cardId, "character")
+                onlineGlossaryDialog.open()
+                onlineGlossaryDialog.loadDraft()
+            } else { characterDialog.open(); characterDialog.reload() }
+        }
         function onCropRequested() { portraitCropDialog.open() }
-        function onDocumentReplaced() { characterDialog.modified = false; characterDialog.close(); portraitCropDialog.close(); reviewsDialog.close(); reviewCompose.close(); actorDialog.close() }
+        function onDocumentReplaced() { onlineConflictDialog.close(); onlineGlossaryDialog.close(); characterDialog.modified = false; characterDialog.close(); portraitCropDialog.close(); reviewsDialog.close(); reviewCompose.close(); onlineWorkflowDialog.close(); actorDialog.close() }
     }
 
     SettingsDialog { id: settingsDialog; objectName: "settingsDialog"; colors: window.colors }
@@ -519,6 +575,10 @@ ApplicationWindow {
         standardButtons: Dialog.Ok | Dialog.Cancel
         onAccepted: backend.batch("lead", leadIn.value + "," + leadOut.value, leadAll.checked)
         ColumnLayout { anchors.fill: parent; Label { text: "Вход, мс" } DialogSpinBox { id: leadIn; from: 0; to: 5000; value: 100; editable: true } Label { text: "Выход, мс" } DialogSpinBox { id: leadOut; from: 0; to: 5000; value: 200; editable: true } CheckBox { id: leadAll; text: "Все реплики документа" } }
+    }
+    AssTagsDialog {
+        id: assTagsDialog
+        colors: window.colors
     }
     AssignCharacterDialog {
         id: actorDialog

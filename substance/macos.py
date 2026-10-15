@@ -277,11 +277,13 @@ class MacOSIntegration(QObject):
             return {'nativeToolbar': False}
         view = objc.objc_object(c_void_p=int(window.winId()))
         sidebar = window.findChild(QObject, 'nativeGlassSidebar')
+        # app.exec() may already have detached the native content view on quit.
+        content_view, parent_view = self._window.contentView(), view.superview()
         return {'nativeToolbar': self._active, 'nativeToolbarItems': [str(item.itemIdentifier()) for item in self._toolbar.items()],
                 'liquidGlassAvailable': self.liquidGlassAvailable,
                 'nativeGlassSidebar': bool(sidebar and sidebar.active),
-                'qtContentViewPreserved': int(objc.pyobjc_id(self._window.contentView())) == self._content_pointer,
-                'qtViewParentPreserved': int(objc.pyobjc_id(view.superview())) == self._parent_pointer}
+                'qtContentViewPreserved': content_view is not None and int(objc.pyobjc_id(content_view)) == self._content_pointer,
+                'qtViewParentPreserved': parent_view is not None and int(objc.pyobjc_id(parent_view)) == self._parent_pointer}
 
     def detach(self):
         if self._window is not None:

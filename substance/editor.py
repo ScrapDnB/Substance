@@ -27,6 +27,7 @@ class Editor(ProjectEdits):
         self.redo_stack: list[HistoryEntry] = []
         self.revision = self.saved_revision = 0
         self._serial = 0
+        self.validator = None
 
     @property
     def dirty(self) -> bool:
@@ -42,6 +43,8 @@ class Editor(ProjectEdits):
         if self.project_mode:
             sync_characters(after)
         after.validate()
+        if self.validator:
+            self.validator(after)
         if after == before:
             return False
         self._serial += 1

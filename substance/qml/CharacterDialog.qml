@@ -13,6 +13,7 @@ NativeDialog {
     modal: false
     standardButtons: Dialog.NoButton
     function stage() {
+        if (backend.onlineSession.active) return
         if (loading) return
         modified = true
         backend.stageCard(editedId, cardName.text, aliases.text, exportName.text, description.text, speech.text, notes.text)
@@ -45,6 +46,7 @@ NativeDialog {
         spacing: 16
         ColumnLayout {
             Layout.preferredWidth: 180; Layout.fillHeight: true
+            Label { visible: backend.onlineSession.active; Layout.fillWidth: true; text: "Общий глоссарий. Правки карточек — в DubbingManager."; wrapMode: Text.WordWrap; font.pixelSize: 11 }
             ListView {
                 id: cards
                 objectName: "characterList"
@@ -63,8 +65,8 @@ NativeDialog {
                     }
                 }
             }
-            Button { text: "Новый персонаж"; Layout.fillWidth: true; onClicked: dialog.switchCard("") }
-            Button { text: "Удалить карточку"; enabled: dialog.editedId.length > 0 && backend.currentCard.cues.length === 0; Layout.fillWidth: true; onClicked: backend.deleteCharacter(dialog.editedId) }
+            Button { text: "Новый персонаж"; enabled: !backend.onlineSession.active; Layout.fillWidth: true; onClicked: dialog.switchCard("") }
+            Button { text: "Удалить карточку"; enabled: !backend.onlineSession.active && dialog.editedId.length > 0 && backend.currentCard.cues.length === 0; Layout.fillWidth: true; onClicked: backend.deleteCharacter(dialog.editedId) }
         }
         ColumnLayout {
             Layout.fillWidth: true; Layout.fillHeight: true
@@ -80,22 +82,22 @@ NativeDialog {
                         ColumnLayout {
                             Layout.fillWidth: true
                             Label { text: "Имя персонажа" }
-                            DialogTextField { id: cardName; objectName: "characterName"; Layout.fillWidth: true; placeholderText: "Имя"; onTextEdited: dialog.stage() }
+                            DialogTextField { readOnly: backend.onlineSession.active; id: cardName; objectName: "characterName"; Layout.fillWidth: true; placeholderText: "Имя"; onTextEdited: dialog.stage() }
                             Label { text: "Имя в экспорте"; color: dialog.colors.muted }
-                            DialogTextField { id: exportName; Layout.fillWidth: true; placeholderText: cardName.text; onTextEdited: dialog.stage() }
+                            DialogTextField { readOnly: backend.onlineSession.active; id: exportName; Layout.fillWidth: true; placeholderText: cardName.text; onTextEdited: dialog.stage() }
                         }
                     }
                     Label { text: "Альтернативные имена через запятую"; color: dialog.colors.muted }
-                    DialogTextField { id: aliases; Layout.fillWidth: true; onTextEdited: dialog.stage() }
+                    DialogTextField { readOnly: backend.onlineSession.active; id: aliases; Layout.fillWidth: true; onTextEdited: dialog.stage() }
                     Label { text: "Описание" }
-                    DialogTextArea { id: description; Layout.fillWidth: true; Layout.preferredHeight: 80; wrapMode: TextEdit.Wrap; selectByMouse: true; textFormat: TextEdit.PlainText; onTextChanged: dialog.stage() }
+                    DialogTextArea { readOnly: backend.onlineSession.active; id: description; Layout.fillWidth: true; Layout.preferredHeight: 80; wrapMode: TextEdit.Wrap; selectByMouse: true; textFormat: TextEdit.PlainText; onTextChanged: dialog.stage() }
                     Label { text: "Особенности речи и произношение" }
-                    DialogTextArea { id: speech; Layout.fillWidth: true; Layout.preferredHeight: 80; wrapMode: TextEdit.Wrap; selectByMouse: true; textFormat: TextEdit.PlainText; onTextChanged: dialog.stage() }
+                    DialogTextArea { readOnly: backend.onlineSession.active; id: speech; Layout.fillWidth: true; Layout.preferredHeight: 80; wrapMode: TextEdit.Wrap; selectByMouse: true; textFormat: TextEdit.PlainText; onTextChanged: dialog.stage() }
                     Label { text: "Заметки о персонаже" }
-                    DialogTextArea { id: notes; Layout.fillWidth: true; Layout.preferredHeight: 80; wrapMode: TextEdit.Wrap; selectByMouse: true; textFormat: TextEdit.PlainText; onTextChanged: dialog.stage() }
+                    DialogTextArea { readOnly: backend.onlineSession.active; id: notes; Layout.fillWidth: true; Layout.preferredHeight: 80; wrapMode: TextEdit.Wrap; selectByMouse: true; textFormat: TextEdit.PlainText; onTextChanged: dialog.stage() }
                     RowLayout {
-                        Button { text: "Из видео…"; enabled: backend.media.hasVideo; onClicked: { if (dialog.modified || !dialog.editedId) { if (!dialog.save()) return } backend.capturePortrait(dialog.editedId) } }
-                        Button { text: "Из файла…"; onClicked: { if (dialog.modified || !dialog.editedId) { if (!dialog.save()) return } backend.importPortrait(dialog.editedId) } }
+                        Button { text: "Из видео…"; enabled: !backend.onlineSession.active && backend.media.hasVideo; onClicked: { if (dialog.modified || !dialog.editedId) { if (!dialog.save()) return } backend.capturePortrait(dialog.editedId) } }
+                        Button { text: "Из файла…"; enabled: !backend.onlineSession.active; onClicked: { if (dialog.modified || !dialog.editedId) { if (!dialog.save()) return } backend.importPortrait(dialog.editedId) } }
                     }
                     Repeater {
                         model: backend.currentCard.portraits
@@ -106,9 +108,9 @@ NativeDialog {
                             ColumnLayout {
                                 Label { text: modelData.id === backend.currentCard.primary ? "Основной портрет" : "Дополнительное изображение"; color: dialog.colors.muted }
                                 RowLayout {
-                                    Button { text: "Обрезать"; onClicked: backend.recropPortrait(dialog.editedId, modelData.id) }
-                                    Button { text: "Основной"; enabled: modelData.id !== backend.currentCard.primary; onClicked: backend.portraitAction(dialog.editedId, modelData.id, "primary") }
-                                    Button { text: "Удалить"; onClicked: backend.portraitAction(dialog.editedId, modelData.id, "delete") }
+                                    Button { text: "Обрезать"; enabled: !backend.onlineSession.active; onClicked: backend.recropPortrait(dialog.editedId, modelData.id) }
+                                    Button { text: "Основной"; enabled: !backend.onlineSession.active && modelData.id !== backend.currentCard.primary; onClicked: backend.portraitAction(dialog.editedId, modelData.id, "primary") }
+                                    Button { text: "Удалить"; enabled: !backend.onlineSession.active; onClicked: backend.portraitAction(dialog.editedId, modelData.id, "delete") }
                                 }
                                 Button { text: "К кадру видео"; visible: modelData.media_path.length > 0; onClicked: { backend.seekPortrait(dialog.editedId, modelData.id); dialog.close() } }
                             }
@@ -130,7 +132,7 @@ NativeDialog {
                 Layout.alignment: Qt.AlignRight
                 Button { text: "Отменить изменения"; visible: dialog.modified; onClicked: { dialog.modified = false; backend.discardCardDraft(); dialog.reload() } }
                 Button { text: "Закрыть"; onClicked: { if (!dialog.modified || dialog.save()) dialog.close() } }
-                Button { objectName: "saveCharacterCard"; text: "Сохранить карточку"; highlighted: true; enabled: cardName.text.trim().length > 0; onClicked: dialog.save() }
+                Button { objectName: "saveCharacterCard"; text: "Сохранить карточку"; highlighted: true; enabled: !backend.onlineSession.active && cardName.text.trim().length > 0; onClicked: dialog.save() }
             }
         }
     }
