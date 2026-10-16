@@ -12,15 +12,31 @@ def main():
     failed = []
     for path in sorted((root / "tests").glob("test_*.py")):
         print(f"\nTesting {path.name}", flush=True)
-        try:
-            result = subprocess.run(
-                [sys.executable, "-m", "pytest", "-q", str(path)],
-                cwd=root, env=environment, timeout=180,
+        targets = [str(path)]
+        if path.name.startswith("test_online"):
+            # Async QObject trees can outlive a backend fixture. A separate
+            # process for each online scenario matches the app's Qt lifetime.
+            collection = subprocess.run(
+                [sys.executable, "-m", "pytest", "--collect-only", "--color=no", "-q", str(path)],
+                cwd=root, env=environment, timeout=60, capture_output=True,
+                text=True, encoding="utf-8", errors="replace",
             )
-            if result.returncode:
-                failed.append(path.name)
-        except subprocess.TimeoutExpired:
-            failed.append(path.name + " (timeout)")
+            targets = [line.strip() for line in collection.stdout.splitlines()
+                       if line.startswith("tests/") and "::" in line]
+            if collection.returncode or not targets:
+                print(collection.stdout + collection.stderr, flush=True)
+                failed.append(path.name + " (collection)")
+                continue
+        for target in targets:
+            try:
+                result = subprocess.run(
+                    [sys.executable, "-m", "pytest", "-q", target],
+                    cwd=root, env=environment, timeout=180,
+                )
+                if result.returncode:
+                    failed.append(target)
+            except subprocess.TimeoutExpired:
+                failed.append(target + " (timeout)")
     if failed:
         print("Failed modules: " + ", ".join(failed), flush=True)
     return int(bool(failed))

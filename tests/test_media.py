@@ -110,6 +110,8 @@ def test_exact_ass_overlay_is_visible_only_during_interval(app):
 
 def test_native_media_primes_a_paused_video_frame(app, media):
     controller = MediaController()
+    # Frame seeking does not require a physical audio device on CI runners.
+    controller.player.setAudioOutput(None)
     sink = QVideoSink(controller)
     controller.setVideoSink(sink)
     try:
