@@ -7,6 +7,7 @@ ApplicationWindow {
     id: dialog
     default property alias dialogContent: body.data
     required property var colors
+    property bool available: true
     property bool modal: true
     property int standardButtons: Dialog.NoButton
     property int preferredWidth: 480
@@ -36,6 +37,7 @@ ApplicationWindow {
     palette.highlightedText: colors.selectedText
 
     function open() {
+        if (!available) return
         if (visible) { raise(); requestActivate(); return }
         let parentWindow = transientParent as ApplicationWindow
         returnFocus = parentWindow ? parentWindow.activeFocusItem : null
@@ -46,6 +48,7 @@ ApplicationWindow {
     }
     function accept() { accepted(); close() }
     function reject() { rejected(); close() }
+    onAvailableChanged: { if (!available && visible) close() }
     onVisibleChanged: {
         if (visible) opened()
         else {

@@ -4,13 +4,18 @@ Use Python 3.11 or newer and install the development dependencies:
 
 ```sh
 python3 -m venv .venv
+.venv/bin/python -m pip install ./vendor/dubbing-online-client
 .venv/bin/python -m pip install -e '.[dev]'
-QT_QPA_PLATFORM=offscreen .venv/bin/python -m pytest -q
+.venv/bin/python scripts/test.py
 .venv/bin/python run.py
 ```
 
 On Windows use `.venv\Scripts\python.exe`. Package on the target OS with
 `python scripts/build.py`. GitHub Actions tests and packages macOS and Windows.
+The shared online client is included as a source snapshot in
+`vendor/dubbing-online-client`; install it before the editor dependencies.
+See [docs/builds.md](docs/builds.md) for automatic builds and Windows commands
+without a virtual environment.
 
 Keep user projects, media, credentials, virtual environments and generated
 packages out of Git. Private ASS integration fixtures are optional and must be

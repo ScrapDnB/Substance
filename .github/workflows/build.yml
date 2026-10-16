@@ -1,14 +1,21 @@
 name: Test and build alpha
 on:
   push:
+    branches: [main]
   pull_request:
   workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: build-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
   build:
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-latest, windows-latest]
+        os: [macos-26, windows-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -16,7 +23,9 @@ jobs:
         with:
           python-version: '3.13'
       - name: Install Python dependencies
-        run: python -m pip install -e ".[dev]"
+        run: |
+          python -m pip install ./vendor/dubbing-online-client
+          python -m pip install -e ".[dev]"
       - name: Install portable media libraries on macOS
         if: runner.os == 'macOS'
         shell: bash
@@ -46,16 +55,35 @@ jobs:
         run: |
           "SUBSTANCE_LIBASS=C:\msys64\ucrt64\bin\libass-9.dll" | Out-File -FilePath $env:GITHUB_ENV -Append
           "SUBSTANCE_FFPROBE=C:\msys64\ucrt64\bin\ffprobe.exe" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "C:\msys64\ucrt64\bin" | Out-File -FilePath $env:GITHUB_PATH -Append
       - name: Test
         env:
           QT_QPA_PLATFORM: offscreen
-        run: python -m pytest -q
+        run: python scripts/test.py
       - name: Compile package
         run: python scripts/build.py
+      - name: Check packaged application
+        run: python scripts/verify_package.py
+      - name: Archive macOS application
+        if: runner.os == 'macOS'
+        run: ditto -c -k --sequesterRsrc --keepParent dist/Substance.app dist/Substance-macOS.zip
+      - name: Archive Windows application
+        if: runner.os == 'Windows'
+        run: python -c "import shutil; shutil.make_archive('dist/Substance-Windows-x64', 'zip', root_dir='dist', base_dir='Substance')"
       - uses: actions/upload-artifact@v4
         with:
           name: Substance-0.1.0-alpha.5-${{ runner.os }}
           path: |
-            dist/Substance.app
-            dist/Substance
+            dist/Substance-*.zip
+          retention-days: 14
+          if-no-files-found: error
+      - name: Upload package diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: package-diagnostics-${{ runner.os }}
+          path: |
+            build/qa/ci-package*
+            build/qa/macos-minimum.json
+          if-no-files-found: ignore
           retention-days: 14

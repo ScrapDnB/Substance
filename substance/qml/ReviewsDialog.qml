@@ -69,6 +69,7 @@ NativeDialog {
     OnlineReviewList {
         anchors.fill: parent
         visible: backend.onlineSession.active
+        enabled: backend.onlineSession.active
         colors: dialog.colors
         onComposeRequested: kind => dialog.composeRequested(kind)
         onRespondRequested: (entry, state) => dialog.editRequested({onlineReply: true, entry: entry, state: state})

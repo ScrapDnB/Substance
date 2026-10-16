@@ -4,6 +4,7 @@ __pycache__/
 *.pyc
 build/
 dist/
+dist-*/
 *.egg-info/
 .DS_Store
 *.log
@@ -26,4 +27,5 @@ private/
 test_files/
 
 substance/resources/*.dylib
+substance/resources/icon.ico
 substance/resources/licenses/

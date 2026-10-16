@@ -4,6 +4,7 @@ import QtQuick.Layouts
 
 NativeDialog {
     id: dialog
+    available: backend.onlineSession.active
     title: "Сравнение версий серии"
     preferredWidth: 1120
     preferredHeight: 720

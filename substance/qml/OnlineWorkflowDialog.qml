@@ -4,6 +4,7 @@ import QtQuick.Layouts
 
 NativeDialog {
     id: dialog
+    available: backend.onlineSession.active
     property string action: "return"
     title: action === "return" ? "Вернуть перевод на доработку" : "Переоткрыть работу над серией"
     preferredWidth: 560

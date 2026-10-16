@@ -130,14 +130,24 @@ def main():
         initial_selection = backend.select(min(backend.count - 1, max(0, args.select - 1)), 0)
     window.setProperty("startupChromeReady", True)
     result = {"code": 0}
+    native_diagnostics = None
+
+    def finish_smoke():
+        nonlocal native_diagnostics
+        if args.diagnostics:
+            # Qt releases the native content view when the window closes.
+            # Capture AppKit pointers while the window is still alive.
+            native_diagnostics = chrome.diagnostics(window)
+        app.quit()
+
     if args.smoke_test:
-        QTimer.singleShot(600, app.quit)
+        QTimer.singleShot(600, finish_smoke)
     if args.screenshot:
         def capture():
             image = window.grabWindow()
             if image.isNull() or not image.save(args.screenshot):
                 result["code"] = 1
-            app.quit()
+            finish_smoke()
         QTimer.singleShot(3000 if not args.media else 6000, capture)
     code = app.exec()
     if args.diagnostics:
@@ -150,7 +160,7 @@ def main():
                   "initialSelectionApplied": initial_selection, "pendingDraft": bool(backend.draft), "media": backend.media_controller.path,
                   "videoFrameValid": bool(backend.media_controller._sink and backend.media_controller._sink.videoFrame().isValid()),
                   "audioBins": len(backend.media_controller.peaks), "spectrumShape": list(backend.media_controller.spectrum.shape), "keyframes": backend.media_controller.keyframeCount}
-        report.update(chrome.diagnostics(window))
+        report.update(native_diagnostics if native_diagnostics is not None else chrome.diagnostics(window))
         report["online"] = {"active": backend.online.active, "pending": backend.online.pending,
                             "revision": backend.online.revision,
                             "sessionProtected": backend.online._session_persisted}

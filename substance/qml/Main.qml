@@ -120,7 +120,6 @@ ApplicationWindow {
             title: "Файл"
             MenuItem { action: newAction }
             MenuItem { action: openAction }
-            MenuItem { text: "Продолжить онлайн-серию"; enabled: !backend.onlineSession.active && !backend.onlineSession.busy && backend.onlineSession.canResume; onTriggered: backend.onlineSession.resume() }
             Menu {
                 id: recentMenu
                 title: "Недавние файлы"
@@ -414,12 +413,15 @@ ApplicationWindow {
     }
 
     footer: Rectangle {
+        objectName: "documentStatusBar"
         height: backend.onlineSession.active ? 66 : 30
         color: window.colors.header
         Rectangle { width: parent.width; height: 1; color: window.colors.border }
         RowLayout {
             id: onlineStatus
+            objectName: "onlineStatus"
             visible: backend.onlineSession.active
+            enabled: backend.onlineSession.active
             anchors.top: parent.top
             anchors.left: parent.left
             anchors.right: parent.right

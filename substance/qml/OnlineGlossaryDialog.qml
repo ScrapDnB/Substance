@@ -4,6 +4,7 @@ import QtQuick.Layouts
 
 NativeDialog {
     id: dialog
+    available: backend.onlineSession.active
     title: "Общий глоссарий проекта"
     preferredWidth: 1000
     preferredHeight: 720

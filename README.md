@@ -91,10 +91,10 @@ open dist/Substance.app
 
 ## Репозиторий
 
-Локальный Git-репозиторий использует ветку `main`. Исходники, документация,
+Git-репозиторий использует ветку `main`. Исходники, документация,
 тесты и GitHub Actions включены; сборки, окружения, проекты, медиа и локальные
-данные исключены через `.gitignore`. Удалённый репозиторий можно подключить
-после создания репозитория на GitHub. Инструкции для разработки —
+данные исключены через `.gitignore`. Автоматические сборки описаны в
+[docs/builds.md](docs/builds.md). Инструкции для разработки —
 [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Горячие клавиши
@@ -125,6 +125,7 @@ open dist/Substance.app
 
 ```sh
 python3 -m venv .venv
+.venv/bin/python -m pip install ./vendor/dubbing-online-client
 .venv/bin/python -m pip install -e '.[dev]'
 .venv/bin/python run.py
 ```
@@ -132,11 +133,11 @@ python3 -m venv .venv
 На Windows используйте `.venv\Scripts\python.exe`. Для точного ASS-предпросмотра из исходников установите libass; на Mac — `brew install libass ffmpeg`. В сборке необходимые библиотеки уже включены. PyObjC устанавливается только на macOS. Отдельная компиляция Swift-моста не нужна.
 
 ```sh
-.venv/bin/python -m pytest -q
+.venv/bin/python scripts/test.py
 .venv/bin/python scripts/build.py
 ```
 
-Собирать приложение нужно на целевой ОС и архитектуре. GitHub Actions в `.github/workflows/build.yml` готовит отдельные пакеты macOS и Windows. Для проверки приватных примеров можно задать `DUBBING_MANAGER_TEST_FILES`; при их отсутствии соответствующий тест пропускается. Оригинальные тестовые файлы не изменяются и не включаются в дистрибутив.
+Собирать приложение нужно на целевой ОС и архитектуре. GitHub Actions в `.github/workflows/build.yml` автоматически готовит отдельные пакеты macOS (Apple Silicon) и Windows (x64) при обновлении `main`; также доступны проверки pull request и ручной запуск. Общий клиент DubbingManager устанавливается из `vendor/dubbing-online-client`, поэтому соседний репозиторий и приватный индекс пакетов не нужны. Для проверки приватных примеров можно задать `DUBBING_MANAGER_TEST_FILES`; при их отсутствии соответствующий тест пропускается. Оригинальные тестовые файлы не изменяются и не включаются в дистрибутив.
 
 Для сборки Mac используйте Python с минимальной версией macOS не выше 15. Системные библиотеки Homebrew могут требовать версию ОС, на которой они собраны. Локальный пакет использует совместимые библиотеки conda-forge из `build/portable`; CI выполняет такую же установку. Можно задать свои пути `SUBSTANCE_LIBASS` и `SUBSTANCE_FFPROBE`. Сборщик отклоняет пакет, если какая-либо встроенная библиотека требует macOS новее заявленной в `Info.plist`.
 

@@ -1089,6 +1089,7 @@ class Backend(QObject):
         self._current = 0 if document.cues else -1
         self.selection = {0} if document.cues else set()
         self._busy = False
+        self._message = ""
         self._refresh()
         self.centerWaveform.emit()
         self._remove_recovery()

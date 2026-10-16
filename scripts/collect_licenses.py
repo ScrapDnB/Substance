@@ -15,7 +15,7 @@ provenance = ['Built with Python ' + sys.version, 'Platform: ' + sys.platform]
 python_license = Path(sys.base_prefix) / f'lib/python{sys.version_info.major}.{sys.version_info.minor}/LICENSE.txt'
 if python_license.is_file():
     shutil.copyfile(python_license, target / 'Python-LICENSE.txt')
-for name in ('PySide6', 'PySide6-Essentials', 'PySide6-Addons', 'shiboken6', 'numpy', 'imageio-ffmpeg', 'pyspellchecker', 'pyinstaller', 'pyobjc-core', 'pyobjc-framework-Cocoa', 'keyring', 'certifi', 'jaraco.classes', 'jaraco.functools', 'jaraco.context', 'more-itertools', 'backports.tarfile'):
+for name in ('dubbing-online-client', 'PySide6', 'PySide6-Essentials', 'PySide6-Addons', 'shiboken6', 'numpy', 'imageio-ffmpeg', 'pyspellchecker', 'pyinstaller', 'pyobjc-core', 'pyobjc-framework-Cocoa', 'keyring', 'certifi', 'jaraco.classes', 'jaraco.functools', 'jaraco.context', 'more-itertools', 'backports.tarfile'):
     try:
         package = distribution(name)
     except PackageNotFoundError:
