@@ -35,7 +35,7 @@ def test_immediate_close_flushes_field_before_debounce_and_waits_for_server(back
     assert backend.draft and repo.client.revision == 1
     assert not backend.requestClose()
     assert not ready
-    assert json.loads(repo.path.read_text())["draft"]["cues"][0]["translation"] == PHRASE
+    assert json.loads(repo.path.read_text(encoding="utf-8"))["draft"]["cues"][0]["translation"] == PHRASE
     until(lambda: ready)
     assert repo.client.wire["cues"][0]["translation"] == PHRASE
     assert not repo.pending and not failures
@@ -105,7 +105,7 @@ def test_unknown_put_retries_same_uuid_then_sends_newer_close_draft(backend, mon
         release.set()
     until(lambda: failures)
     assert not ready and repo.pending
-    pending = deepcopy(json.loads(repo.path.read_text())["pending"])
+    pending = deepcopy(json.loads(repo.path.read_text(encoding="utf-8"))["pending"])
     backend.online.retry_close()
     until(lambda: ready)
     assert attempts[0] == attempts[1] == pending
@@ -140,7 +140,7 @@ def test_network_failure_keeps_window_or_explicitly_closes_with_durable_draft(ba
         backend.stage("text", PHRASE + " Ещё.")
         backend.online.close_locally()
         assert ready and backend.requestClose()
-    saved = json.loads(repo.path.read_text())
+    saved = json.loads(repo.path.read_text(encoding="utf-8"))
     assert saved["draft"]["cues"][0]["translation"].startswith(PHRASE)
     assert saved["pending"]["document"]["cues"][0]["translation"] == PHRASE
 

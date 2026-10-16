@@ -259,12 +259,12 @@ def test_neutral_style_output_preserves_inline_commands_and_original_project(tmp
     assert doc.to_dict() == before
     path = tmp_path / "neutral.ass"
     save_document(doc, path, use_ass_styles=False)
-    assert path.read_text() == neutral
+    assert path.read_text(encoding="utf-8") == neutral
     restored = load_document(path).to_dict()
     restored.pop("ass_sha256", None)
     assert restored == before
     export_document(doc, path, use_ass_styles=False, originals=True)
-    assert path.read_text() == text
+    assert path.read_text(encoding="utf-8") == text
     project = tmp_path / "styles.substance"
     save_document(doc, project, use_ass_styles=False)
     assert load_document(project).skeleton == doc.skeleton
@@ -279,21 +279,21 @@ def test_backend_style_policy_matches_preview_save_and_export(editor_ui, tmp_pat
     assert "Style: Default,0,0,0,0" in backend.previewScript
     output = tmp_path / "policy.ass"
     assert backend._save_path(str(output))
-    assert style_states(parse_ass(output.read_text()).skeleton)["Default"]["b"] == 0
+    assert style_states(parse_ass(output.read_text(encoding="utf-8")).skeleton)["Default"]["b"] == 0
     backend._ass_notice.close()
     backend.setUseAssStyles(True)
     backend._update_preview()
     assert "Style: Default,-1,-1,0,0" in backend.previewScript
     assert backend.save()
-    assert style_states(parse_ass(output.read_text()).skeleton)["Default"]["b"] == 1
+    assert style_states(parse_ass(output.read_text(encoding="utf-8")).skeleton)["Default"]["b"] == 1
     backend._ass_notice.close()
     assert backend._save_path(str(tmp_path / "policy.substance"))
     backend.setUseAssStyles(False)
     exported = tmp_path / "export.ass"
     monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *a: (str(exported), "ASS (*.ass)"))
     assert backend.saveAs()
-    assert style_states(parse_ass(exported.read_text()).skeleton)["Default"]["b"] == 0
+    assert style_states(parse_ass(exported.read_text(encoding="utf-8")).skeleton)["Default"]["b"] == 0
     backend._ass_notice.close()
     backend.exportDialog()
-    assert style_states(parse_ass(exported.read_text()).skeleton)["Default"]["b"] == 0
+    assert style_states(parse_ass(exported.read_text(encoding="utf-8")).skeleton)["Default"]["b"] == 0
     backend._ass_notice.close()

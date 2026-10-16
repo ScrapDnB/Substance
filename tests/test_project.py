@@ -144,7 +144,7 @@ def test_rename_character_keeps_links_and_export_uses_export_name(tmp_path):
     assert e.document.cues[0].character == 'Мика'
     output = tmp_path / 'out.ass'
     export_document(e.document, output)
-    assert ',MIKA,' in output.read_text()
+    assert ',MIKA,' in output.read_text(encoding="utf-8")
     assert not (tmp_path / 'out.ass.substance').exists()
     e.undo()
     assert e.document.cues[0].character == 'Mika'
@@ -164,10 +164,10 @@ def test_project_roundtrip_and_ass_sidecar_excludes_project_data(tmp_path):
     assert load_document(path).to_dict() == e.document.to_dict()
     output = tmp_path / 'out.ass'
     save_document(e.document, output)
-    sidecar = json.loads(output.with_name('out.ass.substance').read_text())
+    sidecar = json.loads(output.with_name('out.ass.substance').read_text(encoding="utf-8"))
     assert all(k not in sidecar for k in ('reviews', 'characters', 'images', 'review_settings'))
     assert all(not c['character_id'] for c in sidecar['cues'])
-    assert 'Private project note' not in output.read_text()
+    assert 'Private project note' not in output.read_text(encoding="utf-8")
     assert not load_document(output).reviews
 
 

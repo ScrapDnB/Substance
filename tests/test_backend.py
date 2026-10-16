@@ -76,7 +76,7 @@ def test_autosave_contains_uncommitted_input(backend):
     backend.stage('text', 'Unsaved draft')
     backend.autosave()
     import json
-    saved = json.loads(backend.recovery_path.read_text())
+    saved = json.loads(backend.recovery_path.read_text(encoding="utf-8"))
     assert saved['recovery_draft']['text'] == 'Unsaved draft'
 
 

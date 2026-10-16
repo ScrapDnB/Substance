@@ -93,7 +93,7 @@ def test_translation_sidecar_is_hash_guarded(tmp_path):
     restored = load_document(path)
     assert restored.cues[0].original == original
     assert restored.cues[0].translation == 'Hello!'
-    path.write_text(path.read_text().replace('Hello!', 'External!'))
+    path.write_text(path.read_text(encoding="utf-8").replace('Hello!', 'External!'), encoding="utf-8")
     changed = load_document(path)
     assert changed.cues[0].text == 'External!'
     assert changed.cues[0].translation is None

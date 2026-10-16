@@ -148,7 +148,7 @@ def test_ass_save_and_exports_warn_and_keep_original(app, tmp_path, monkeypatch)
         assert ".substance" in b._ass_notice.informativeText()
         assert "saved.ass.substance" in b._ass_notice.informativeText()
         assert load_document(ass).cues[0].original == "Source"
-        assert "Перевод" in ass.read_text()
+        assert "Перевод" in ass.read_text(encoding="utf-8")
         b._ass_notice.close()
         assert b.save()
         assert b._ass_notice.isVisible()
@@ -163,7 +163,7 @@ def test_ass_save_and_exports_warn_and_keep_original(app, tmp_path, monkeypatch)
         b.exportDialog(True)
         assert b._ass_notice.isVisible()
         assert "оригинальный" in b._ass_notice.text()
-        assert "Source" in output.read_text()
+        assert "Source" in output.read_text(encoding="utf-8")
     finally:
         if b._ass_notice:
             b._ass_notice.close()

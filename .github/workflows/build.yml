@@ -44,6 +44,7 @@ jobs:
           echo "SUBSTANCE_LIBASS=$PWD/build/portable/lib/libass.9.dylib" >> "$GITHUB_ENV"
           echo "SUBSTANCE_FFPROBE=$PWD/build/portable/bin/ffprobe" >> "$GITHUB_ENV"
       - uses: msys2/setup-msys2@v2
+        id: msys2
         if: runner.os == 'Windows'
         with:
           msystem: UCRT64
@@ -52,10 +53,15 @@ jobs:
       - name: Configure Windows libass
         if: runner.os == 'Windows'
         shell: pwsh
+        env:
+          MSYS2_LOCATION: ${{ steps.msys2.outputs.msys2-location }}
         run: |
-          "SUBSTANCE_LIBASS=C:\msys64\ucrt64\bin\libass-9.dll" | Out-File -FilePath $env:GITHUB_ENV -Append
-          "SUBSTANCE_FFPROBE=C:\msys64\ucrt64\bin\ffprobe.exe" | Out-File -FilePath $env:GITHUB_ENV -Append
-          "C:\msys64\ucrt64\bin" | Out-File -FilePath $env:GITHUB_PATH -Append
+          $mediaBin = Join-Path $env:MSYS2_LOCATION 'ucrt64\bin'
+          if (!(Test-Path "$mediaBin\libass-9.dll") -or !(Test-Path "$mediaBin\ffprobe.exe")) {
+            throw "Missing media libraries in $mediaBin"
+          }
+          "SUBSTANCE_LIBASS=$mediaBin\libass-9.dll" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "SUBSTANCE_FFPROBE=$mediaBin\ffprobe.exe" | Out-File -FilePath $env:GITHUB_ENV -Append
       - name: Test
         env:
           QT_QPA_PLATFORM: offscreen

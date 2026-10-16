@@ -157,7 +157,7 @@ def test_live_notes_filters_archives_and_recovery(bridge):
     b.deleteLines()
     assert b.reviewEntries[0]['archived']
     b.autosave()
-    data = json.loads(b.recovery_path.read_text())
+    data = json.loads(b.recovery_path.read_text(encoding="utf-8"))
     assert data['reviews'][0]['text'] == 'Check name'
 
 
@@ -295,7 +295,7 @@ def test_uncommitted_card_draft_is_recovered_and_committed_on_save(bridge, monke
     b.selectCard(cid)
     b.stageCard(cid, 'Renamed', 'Alias', 'EXPORT', 'New description', 'Formal', 'Unfinished note')
     b.autosave()
-    assert json.loads(b.recovery_path.read_text())['recovery_card_draft']['notes'] == 'Unfinished note'
+    assert json.loads(b.recovery_path.read_text(encoding="utf-8"))['recovery_card_draft']['notes'] == 'Unfinished note'
     b._card_draft = {}
     monkeypatch.setattr(QMessageBox, 'question', lambda *args: QMessageBox.StandardButton.Yes)
     b.restore_recovery()
@@ -315,7 +315,7 @@ def test_save_as_ass_exports_without_leaving_project(bridge, monkeypatch, tmp_pa
     monkeypatch.setattr(QFileDialog, 'getSaveFileName', lambda *a: (str(output), 'ASS (*.ass)'))
     assert b.saveAs()
     assert b.path == original and b.isProject and b.dirty
-    assert 'Project-only note' not in output.read_text()
+    assert 'Project-only note' not in output.read_text(encoding="utf-8")
     assert not output.with_name(output.name+'.substance').exists()
 
 

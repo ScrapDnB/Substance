@@ -32,7 +32,7 @@ def app():
 def media(tmp_path_factory):
     folder = tmp_path_factory.mktemp('media')
     subs = folder / 'embedded.ass'
-    subs.write_text(DEFAULT_ASS + 'Dialogue: 0,0:00:00.20,0:00:01.50,Default,Mika,0,0,0,,Hello!\n')
+    subs.write_text(DEFAULT_ASS + 'Dialogue: 0,0:00:00.20,0:00:01.50,Default,Mika,0,0,0,,Hello!\n', encoding="utf-8")
     clip = folder / 'test.mkv'
     subprocess.run([ffmpeg_executable(), '-nostdin', '-v', 'error', '-f', 'lavfi', '-i', 'testsrc2=size=320x180:rate=24:duration=2', '-f', 'lavfi', '-i', 'sine=frequency=420:duration=2', '-i', str(subs), '-map', '0:v', '-map', '1:a', '-map', '2:s', '-c:v', 'libx264', '-g', '24', '-c:a', 'pcm_s16le', '-c:s', 'ass', '-y', str(clip)], check=True, timeout=30, **process_options())
     return clip

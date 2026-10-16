@@ -107,7 +107,7 @@ def test_local_document_can_replace_remote_without_losing_its_journal(backend):
     path = backend.online.repository.path
     backend._set_document(Document(), "")
     assert not backend.online.active and not backend.isProject
-    assert path.exists() and "Черновик" in path.read_text()
+    assert path.exists() and "Черновик" in path.read_text(encoding="utf-8")
 
 
 @pytest.mark.parametrize("video_state", ["present", "missing", "unset"])
@@ -165,7 +165,7 @@ def test_handoff_video_is_local_and_survives_refresh_and_resume(
     assert backend.editor.document.media == expected
     assert opened == ([str(video)] if expected else [])
     assert bool(cleared) == (not expected)
-    saved = json.loads((backend.data_dir / "online-last.json").read_text())
+    saved = json.loads((backend.data_dir / "online-last.json").read_text(encoding="utf-8"))
     assert saved.get("media_path", "") == launch.get("media_path", "")
     assert "one-time-secret" not in repr(saved) and "private-token" not in repr(saved)
 
@@ -178,7 +178,7 @@ def test_handoff_video_is_local_and_survives_refresh_and_resume(
     wait(backend)
     assert backend.editor.document.cues[0].translation == "Remote change"
     assert backend.editor.document.media == expected
-    assert str(video) not in backend.online.repository.path.read_text()
+    assert str(video) not in backend.online.repository.path.read_text(encoding="utf-8")
     assert str(video) not in repr(client.wire)
 
     backend.online.disconnect()
