@@ -16,7 +16,7 @@ dev = ["pytest>=8,<10", "pyinstaller>=6.15,<7"]
 substance = "substance.app:main"
 
 [tool.setuptools.package-data]
-substance = ["qml/*.qml", "qml/+macOS/*.qml", "resources/*", "resources/icons/*.svg", "resources/licenses/**/*"]
+substance = ["qml/*.qml", "qml/+macOS/*.qml", "resources/*", "resources/icons/*.svg", "resources/fonts/*", "resources/licenses/**/*"]
 
 [tool.setuptools.packages.find]
 include = ["substance*"]

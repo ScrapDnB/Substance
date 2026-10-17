@@ -256,8 +256,9 @@ def test_qml_review_and_portrait_workflow(bridge):
         image.fill(QColor('green'))
         b._begin_crop(image, {'cardId': b.current['characterId'], 'media_path': '', 'time': 0, 'crop': [0, 0, 1, 1]})
         QTest.qWait(80)
-        js('portraitCropDialog.setRatio(1)')
         crop_dialog = w.findChild(QObject, 'portraitCropDialog')
+        assert crop_dialog.property('lockedRatio') == 1
+        assert crop_dialog.property('cropW') * 320 / (crop_dialog.property('cropH') * 180) == pytest.approx(1)
         crop_rect = w.findChild(QObject, 'portraitCropRect')
         old_x = crop_dialog.property('cropX')
         center = crop_rect.mapToScene(QPointF(crop_rect.width()/2, crop_rect.height()/2)).toPoint()
@@ -275,12 +276,122 @@ def test_qml_review_and_portrait_workflow(bridge):
         assert crop_dialog.property('cropW') * 320 / (crop_dialog.property('cropH') * 180) == pytest.approx(1)
         click('savePortraitCrop')
         assert b.currentPortraitUrl
+        portrait = b.editor.document.characters[0].portraits[0]
+        b.recropPortrait(b.current['characterId'], portrait['id'])
+        QTest.qWait(80)
+        assert [crop_dialog.property(k) for k in ('cropX', 'cropY', 'cropW', 'cropH')] == portrait['crop']
+        js('portraitCropDialog.close()')
         assert w.findChild(QObject, 'characterDialog').property('visible')
         # Render a real card with its embedded portrait; reject QML runtime failures.
         QTest.qWait(100)
         assert not w.grabWindow().isNull()
         errors = [m for m in messages if any(s in m for s in ('ReferenceError', 'TypeError', 'failed to load', 'Binding loop', 'Cannot assign', 'Unable to assign', 'Failed to get image', 'Duplicate method'))]
         assert not errors, errors
+    finally:
+        if engine.rootObjects():
+            shiboken6.delete(engine.rootObjects()[0])
+        shiboken6.delete(engine)
+        qInstallMessageHandler(previous)
+
+
+@pytest.mark.parametrize('mode', ['timing', 'translation'])
+def test_table_portraits_follow_character_primary_and_undo(bridge, mode, tmp_path):
+    app, b = bridge
+    b.setMode(mode)
+    card_id = b.current['characterId']
+    messages = []
+    previous = qInstallMessageHandler(lambda kind, context, message: messages.append(message))
+    engine = QQmlApplicationEngine()
+    engine.addImageProvider('project', ProjectImageProvider(b))
+    engine.rootContext().setContextProperty('backend', b)
+    try:
+        engine.load(QUrl.fromLocalFile(str(ROOT / 'substance/qml/Main.qml')))
+        assert engine.rootObjects(), messages
+        w = engine.rootObjects()[0]
+
+        def portrait():
+            QTest.qWait(80)
+            table = w.findChild(QObject, 'subtitleTable')
+            def descendants(item):
+                for child in item.childItems():
+                    yield child
+                    yield from descendants(child)
+            return next(item for item in descendants(table) if item.objectName() == 'cuePortrait_0')
+
+        assert not portrait().property('visible')
+        urls = []
+        portrait_ids = []
+        for color in ('green', 'red'):
+            image = QImage(80, 120, QImage.Format.Format_RGB32)
+            image.fill(QColor(color))
+            b._begin_crop(image, {'cardId': card_id, 'media_path': '', 'time': 0})
+            assert b.savePortrait(card_id, '', 0, 0, 1, 1, True)
+            item = portrait()
+            urls.append(item.property('source').toString())
+            portrait_ids.append(b.editor.document.characters[0].primary)
+            assert urls[-1] == b.currentPortraitUrl
+            ready = QQmlExpression(qmlContext(item), item, 'status === Image.Ready')
+            assert item.property('visible') and ready.evaluate()[0] is True
+            assert not ready.hasError(), ready.error().toString()
+            assert 0 < item.width() == item.height() <= 28
+        assert urls[0] != urls[1]
+        b.portraitAction(card_id, portrait_ids[0], 'primary')
+        assert portrait().property('source').toString() == urls[0]
+        b.undo()
+        assert portrait().property('source').toString() == urls[1]
+        b.assignCharacter('')
+        assert not portrait().property('visible')
+        b.undo()
+        assert portrait().property('source').toString() == urls[1]
+        b.setSearch(b.editor.document.cues[0].text[:8], False, False)
+        assert portrait().property('source').toString() == urls[1]
+        b.appearance.setValue('general', 'uiScale', 125)
+        b.appearance.setValue('general', 'rowHeight', 48)
+        close_dialogs = QQmlExpression(qmlContext(w), w, 'portraitCropDialog.close(); characterDialog.close()')
+        close_dialogs.evaluate()
+        assert not close_dialogs.hasError(), close_dialogs.error().toString()
+        w.resize(980, 650)
+        item = portrait()
+        assert item.width() == item.height() == 35
+        assert item.width() < item.parentItem().height()
+        w.resize(1440, 1100)
+        QTest.qWait(80)
+        assert w.grabWindow().save(str(tmp_path / (mode + '-portraits.png')))
+        # A real click opens the full image without changing the selected cues.
+        b.select(1, 0)
+        item = portrait()
+        selected = set(b.selection)
+        document = b.editor.document.to_dict()
+        point = item.mapToScene(QPointF(item.width() / 2, item.height() / 2)).toPoint()
+        for close_key in (Qt.Key.Key_Escape, Qt.Key.Key_W):
+            QTest.mouseClick(w, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, point)
+            QTest.qWait(80)
+            preview = w.findChild(QObject, 'tablePortraitPreview')
+            assert preview.isVisible() and preview.transientParent() == w
+            assert b.editor.document.cues[0].character in preview.title()
+            full_image = preview.findChild(QObject, 'tablePortraitPreviewImage')
+            assert full_image.property('source').toString() == urls[1]
+            assert full_image.property('implicitWidth') == 80
+            assert full_image.property('implicitHeight') == 120
+            assert full_image.width() > item.width()
+            assert full_image.height() > item.height()
+            assert b.selection == selected and b.editor.document.to_dict() == document
+            assert not preview.grabWindow().isNull()
+            assert preview.grabWindow().save(str(tmp_path / (mode + '-portrait-preview.png')))
+            modifiers = Qt.KeyboardModifier.ControlModifier if close_key == Qt.Key.Key_W else Qt.KeyboardModifier.NoModifier
+            QTest.keyClick(preview, close_key, modifiers)
+            QTest.qWait(60)
+            assert not preview.isVisible()
+        b.portraitAction(card_id, portrait_ids[1], 'delete')
+        assert portrait().property('source').toString() == urls[0]
+        b.portraitAction(card_id, portrait_ids[0], 'delete')
+        assert not portrait().property('visible')
+        errors = [m for m in messages if any(s in m for s in (
+            'ReferenceError', 'TypeError', 'Binding loop', 'Cannot assign',
+            'Unable to assign', 'Failed to get image', 'failed to load',
+        ))]
+        assert not errors, errors
+        assert not w.grabWindow().isNull()
     finally:
         if engine.rootObjects():
             shiboken6.delete(engine.rootObjects()[0])
@@ -355,8 +466,8 @@ def test_auxiliary_windows_lifecycle_and_standard_buttons(bridge):
         assert b.editor.document.cues[0].start == original_start + 100
         b.undo()
         js('settingsDialog.open()')
-        tabs = w.findChild(QObject, 'settingsTabs')
-        for page in range(3):
+        tabs = w.findChild(QObject, 'settingsNavigation')
+        for page in range(7):
             tabs.setProperty('page', page)
             QTest.qWait(40)
             assert tabs.property('currentIndex') == page

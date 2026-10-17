@@ -13,7 +13,11 @@ import tempfile
 root = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(root))
 os.environ['SUBSTANCE_DATA_DIR'] = tempfile.mkdtemp(prefix='substance-dialog-qa-')
-from PySide6.QtCore import QObject, Qt, QUrl, QPointF, QTimer, qInstallMessageHandler
+# Native QTest pointer/key helpers hold the GIL. Keep Python-painted waveform
+# items on the GUI thread during this test; the application's render loop is
+# unchanged. Otherwise a helper can wait for a render thread waiting for Python.
+os.environ.setdefault('QSG_RENDER_LOOP', 'basic')
+from PySide6.QtCore import QObject, Qt, QUrl, QPointF, QTimer, QEventLoop, qInstallMessageHandler
 from PySide6.QtGui import QColor, QImage
 from PySide6.QtWidgets import QApplication, QFileDialog
 from PySide6.QtTest import QTest
@@ -25,6 +29,14 @@ from substance.document import load_document
 from substance.images import ProjectImageProvider
 from substance.macos import MacOSIntegration
 from substance import visuals
+
+
+def wait(ms):
+    # QEventLoop releases the GIL while the threaded scene graph calls Python
+    # waveform painters. QTest.qWait can deadlock a real Cocoa render loop.
+    loop = QEventLoop()
+    QTimer.singleShot(ms, loop.quit)
+    loop.exec()
 
 
 def main():
@@ -62,7 +74,7 @@ def main():
         check(not expression.hasError(), code + ': ' + expression.error().toString())
 
     def capture(name, dialog_name):
-        QTest.qWait(120)
+        wait(120)
         dialog = window.findChild(QObject, dialog_name)
         check(dialog is not None and dialog.isVisible(), name + ' visible')
         check(dialog is not window and bool(dialog.flags() & Qt.WindowType.WindowTitleHint)
@@ -89,19 +101,45 @@ def main():
             chrome.configure(window)
         window.setProperty('startupChromeReady', True)
         window.requestActivate()
-        QTest.qWait(150)
+        wait(150)
+        if chrome:
+            from AppKit import NSApplication
+            identifiers = chrome.diagnostics(window)['nativeToolbarItems']
+            check('substance.play' not in identifiers and 'substance.settings' in identifiers,
+                  'Native toolbar has settings and no playback button')
+            item = chrome._delegate.items['substance.settings']
+            check(item.image() is not None and item.isEnabled(), 'Native settings icon is available without media')
+            check(NSApplication.sharedApplication().sendAction_to_from_(item.action(), item.target(), item),
+                  'Native settings action connected')
+            wait(60)
+            check(window.findChild(QObject, 'settingsDialog').isVisible(), 'Native toolbar opens settings')
+            js('settingsDialog.close()')
         for theme in ('light', 'dark'):
             b.preference('theme', theme)
             js('settingsDialog.open()')
-            for index, name in enumerate(('interface', 'document', 'shortcuts')):
-                window.findChild(QObject, 'settingsTabs').setProperty('page', index)
+            for index, name in enumerate(('appearance', 'sizes', 'timing', 'translation', 'checks', 'document', 'shortcuts')):
+                window.findChild(QObject, 'settingsNavigation').setProperty('page', index)
                 capture('settings-' + theme + '-' + name, 'settingsDialog')
-                if index == 0:
+                if index == 1:
+                    for option in b.appearance.timecodeOptions:
+                        b.appearance.setValue('general', 'timecodeFont', option['value'])
+                        wait(60)
+                        check(window.findChild(QObject, 'startField').property('font').family() == option['family'], 'Timecode editor font: ' + option['family'])
+                        check(window.findChild(QObject, 'timecodeFontPreview').property('font').family() == option['family'], 'Timecode preview font: ' + option['family'])
+                        capture('settings-' + theme + '-timecode-' + option['value'], 'settingsDialog')
+                    b.appearance.setValue('general', 'timecodeSize', 28)
+                    wait(60)
+                    for name in ('startField', 'endField', 'mediaTimecode', 'timecodeFontPreview'):
+                        check(window.findChild(QObject, name).property('font').pixelSize() == 28, 'Large timecode size: ' + name)
+                    capture('settings-' + theme + '-timecode-large', 'settingsDialog')
+                    b.appearance.setValue('general', 'timecodeSize', 12)
+                    b.appearance.setValue('general', 'timecodeFont', 'modern')
+                if index == 4:
                     spin = window.findChild(QObject, 'readingSpeedLimit')
                     value = spin.property('value')
                     point = spin.mapToScene(QPointF(spin.width() - 8, spin.height() / 2 - 5)).toPoint()
                     QTest.mouseClick(spin.window(), Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, point)
-                    QTest.qWait(40)
+                    wait(40)
                     check(spin.property('value') == value + 1 and b.cpsLimit == value + 1, 'Stepper applies reading speed')
                     field = spin.property('contentItem')
                     field.forceActiveFocus()
@@ -110,6 +148,28 @@ def main():
                     check(spin.property('value') == 25 and b.cpsLimit == 25, 'Typed numeric setting applies on Return')
             js('settingsDialog.close()')
         b.preference('theme', 'system')
+        b.appearance.preset('mint')
+        b.appearance.setValue('general', 'uiScale', 115)
+        b.appearance.setValue('general', 'tableFont', 15)
+        b.appearance.setValue('general', 'rowHeight', 44)
+        b.appearance.setValue('general', 'wrapRows', True)
+        b.appearance.setValue('general', 'timecodeSize', 28)
+        b.appearance.setValue('timing', 'videoSide', 'right')
+        b.appearance.setValue('timing', 'audioPosition', 'bottom')
+        wait(100)
+        check(window.grabWindow().save(str(qa / 'workspace-timing-custom.png')), 'Customized timing workspace rendered')
+        b.setMode('translation')
+        b.appearance.setValue('translation', 'videoSide', 'left')
+        b.appearance.setValue('translation', 'tableFirst', False)
+        b.appearance.setValue('translation', 'originalBelow', True)
+        b.appearance.setValue('translation', 'contextVisible', False)
+        b.appearance.setValue('translation', 'audioVisible', False)
+        wait(100)
+        check(window.grabWindow().save(str(qa / 'workspace-translation-custom.png')), 'Customized translation workspace rendered')
+        for group in ('general', 'timing', 'translation'):
+            b.appearance.reset(group)
+        b.setMode('timing')
+        wait(80)
         for ident in ('findDialog', 'shiftDialog', 'leadDialog', 'spellingDialog', 'reviewsDialog', 'characterDialog', 'actorDialog'):
             js(ident + '.open()')
             object_name = 'assignCharacterDialog' if ident == 'actorDialog' else ident
@@ -129,11 +189,11 @@ def main():
                 QTest.keyClick(app.focusWindow(), Qt.Key.Key_Return)
                 confirm = capture('create-character', 'createCharacterConfirmation')
                 QTest.keyClick(confirm, Qt.Key.Key_Escape)
-                QTest.qWait(50)
+                wait(50)
                 check(not confirm.isVisible(), 'Nested confirmation closes on Escape')
             js(ident + '.close()')
         js('settingsDialog.open()')
-        QTest.qWait(100)
+        wait(100)
         widget_errors = []
         def inspect_shortcut():
             widget = app.activeModalWidget()
@@ -191,10 +251,10 @@ def main():
         js('settingsDialog.open()')
         b.save()
         window.close()
-        QTest.qWait(100)
+        wait(100)
         visible_windows = [(w.title(), w.objectName(), w.metaObject().className()) for w in app.topLevelWindows() if w.isVisible()]
         check(not visible_windows, 'Closing editor closes auxiliary windows: ' + repr(visible_windows))
-        errors = [m for m in messages if any(s in m for s in ('ReferenceError', 'TypeError', 'Binding loop', 'Cannot assign', 'Unable to assign', 'Duplicate method', 'failed to load'))]
+        errors = [m for m in messages if any(s in m for s in ('ReferenceError', 'TypeError', 'Binding loop', 'Cannot assign', 'Unable to assign', 'Duplicate method', 'failed to load', 'does not support customization'))]
         check(not errors, 'No QML runtime errors: ' + repr(errors))
         (qa / 'checks.json').write_text(json.dumps({'style': style, 'platform': app.platformName(), 'checks': checks, 'messages': messages}, ensure_ascii=False, indent=2))
     finally:

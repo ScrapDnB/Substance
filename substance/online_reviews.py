@@ -30,7 +30,7 @@ class OnlineReviews(QObject):
 
     @Property(bool, notify=changed)
     def supported(self):
-        return self.repository is not None
+        return self.repository is not None and self.online.reviewEnabled
 
     @Property(bool, notify=changed)
     def pending(self):
@@ -57,7 +57,7 @@ class OnlineReviews(QObject):
         )
 
     def _permission(self, key):
-        return bool(self.repository and self.repository.permissions.get(key))
+        return bool(self.online.reviewEnabled and self.repository and self.repository.permissions.get(key))
 
     @Property(bool, notify=changed)
     def canCreate(self):

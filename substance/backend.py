@@ -64,7 +64,7 @@ class LoadTask(QRunnable):
 
 
 class CueModel(QAbstractListModel):
-    ROLE_NAMES = ["sourceIndex", "number", "startTime", "endTime", "character", "cueText", "originalText", "translatedText", "noteCount", "proposalCount", "cps", "warning", "issues", "selected", "comment"]
+    ROLE_NAMES = ["sourceIndex", "number", "startTime", "endTime", "character", "cueText", "originalText", "translatedText", "noteCount", "proposalCount", "cps", "warning", "issues", "selected", "comment", "portraitUrl"]
     def __init__(self, backend):
         super().__init__(backend)
         self.backend = backend
@@ -84,18 +84,38 @@ class CueModel(QAbstractListModel):
         name = self.roles.get(role, b"").decode()
         return self.cache[index.row()].get(name)
 
-    def rebuild(self):
-        self.beginResetModel()
-        self.visible, self.cache = [], []
+    def rebuild(self, incremental=False):
+        visible, cache = [], []
         backend = self.backend
         doc = backend.editor.document
+        portraits = {
+            card.id: 'image://project/' + portrait['image']
+            for card in doc.characters
+            for portrait in card.portraits
+            if portrait['id'] == card.primary and portrait['image'] in doc.images
+        }
         for i, cue in enumerate(doc.cues):
             info = backend.cue_quality(i)
             if not backend.matches(cue, info):
                 continue
-            self.visible.append(i)
-            self.cache.append({"sourceIndex": i, "number": i + 1, "startTime": format_time(cue.start), "endTime": format_time(cue.end), "character": cue.character, "cueText": plain_text(cue.output_text).replace("\n", "  ↵  "), "originalText": plain_text(cue.original).replace("\n", "  ↵  "), "translatedText": plain_text(cue.translation or "").replace("\n", "  ↵  "), "noteCount": backend.review_count(cue.id, "note"), "proposalCount": backend.review_count(cue.id, "proposal"), "cps": info["cps"], "warning": info["warning"], "issues": "\n".join(info["messages"]), "selected": i in backend.selection, "comment": cue.comment})
-        self.endResetModel()
+            visible.append(i)
+            cache.append({"sourceIndex": i, "number": i + 1, "startTime": format_time(cue.start), "endTime": format_time(cue.end), "character": cue.character, "cueText": plain_text(cue.output_text).replace("\n", "  ↵  "), "originalText": plain_text(cue.original).replace("\n", "  ↵  "), "translatedText": plain_text(cue.translation or "").replace("\n", "  ↵  "), "noteCount": backend.review_count(cue.id, "note"), "proposalCount": backend.review_count(cue.id, "proposal"), "cps": info["cps"], "warning": info["warning"], "issues": "\n".join(info["messages"]), "selected": i in backend.selection, "comment": cue.comment})
+            cache[-1]['portraitUrl'] = portraits.get(cue.character_id, '')
+        old_count = len(self.visible)
+        if incremental and visible[:old_count] == self.visible:
+            if len(visible) > old_count:
+                self.beginInsertRows(QModelIndex(), old_count, len(visible) - 1)
+                self.visible.extend(visible[old_count:])
+                self.cache.extend(cache[old_count:])
+                self.endInsertRows()
+            for row in range(old_count):
+                if self.cache[row] != cache[row]:
+                    self.cache[row] = cache[row]
+                    self.dataChanged.emit(self.index(row), self.index(row), [])
+        else:
+            self.beginResetModel()
+            self.visible, self.cache = visible, cache
+            self.endResetModel()
 
     def update_selection(self):
         role = next(k for k, v in self.roles.items() if v == b"selected")
@@ -125,6 +145,12 @@ class Backend(QObject):
     captureChanged = Signal()
     documentReplaced = Signal()
     cardSaved = Signal(str)
+    transcriptionRequested = Signal()
+
+    @Slot()
+    def openTranscription(self):
+        if not self.busy:
+            self.transcriptionRequested.emit()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -138,6 +164,8 @@ class Backend(QObject):
         self.data_dir = Path(data_dir)
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self.settings = QSettings(str(self.data_dir / "settings.ini"), QSettings.Format.IniFormat)
+        from .appearance import AppearanceSettings
+        self._appearance = AppearanceSettings(self.settings, self)
         self.recovery_path = self.data_dir / f"recovery-{os.getpid()}.substance"
         self.path = ""
         self._use_ass_styles = self.settings.value("useAssStyles", False, type=bool)
@@ -198,6 +226,12 @@ class Backend(QObject):
         self.currentChanged.connect(self._update_ass_styles)
         self.local_repository = LocalDocumentRepository()
         self.online = OnlineController(self)
+        from .speech import SpeechController
+        self.speech = SpeechController(self)
+
+    @Property(QObject, constant=True)
+    def transcription(self):
+        return self.speech
 
     def _ass_style_context(self):
         if not self._use_ass_styles:
@@ -484,6 +518,10 @@ class Backend(QObject):
     @Property(str, notify=preferencesChanged)
     def theme(self):
         return self._theme
+
+    @Property(QObject, constant=True)
+    def appearance(self):
+        return self._appearance
 
     @Property(str, notify=preferencesChanged)
     def importEncoding(self):
@@ -1047,6 +1085,9 @@ class Backend(QObject):
         self._guard(lambda: self.editor.transact("Настройки документа", apply))
 
     def _confirm_unsaved(self):
+        if self.speech.running:
+            self.show_error("Сначала остановите распознавание. Готовые реплики останутся в документе.")
+            return False
         if self.online.busy:
             self.show_error("Дождитесь завершения онлайн-запроса")
             return False
@@ -1259,6 +1300,10 @@ class Backend(QObject):
 
     @Slot(result=bool)
     def requestClose(self):
+        if self.speech.running:
+            self.speech.stop()
+            self.speech._flush_segments()
+            self.speech.detach()
         if self.online.active:
             if not self.flushCard() or not self.flush() or not self.online.checkpoint():
                 return False
@@ -1696,6 +1741,7 @@ class Backend(QObject):
                 self.media_controller.seek(portrait['time'])
 
     def shutdown(self):
+        self.speech.shutdown()
         if self._ass_notice is not None:
             self._ass_notice.close()
         self.online.shutdown()

@@ -16,6 +16,13 @@ from PySide6.QtCore import QObject, Property, QThread, QTimer, QUrl, Signal, Slo
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer, QVideoSink, QVideoFrame
 
 
+AUDIO_SAMPLE_RATE = 16000
+WAVEFORM_SAMPLES_PER_PEAK = 4
+WAVEFORM_PEAK_MS = WAVEFORM_SAMPLES_PER_PEAK * 1000 / AUDIO_SAMPLE_RATE
+SPECTRUM_SAMPLES_PER_FRAME = 160
+SPECTRUM_FRAME_MS = SPECTRUM_SAMPLES_PER_FRAME * 1000 / AUDIO_SAMPLE_RATE
+
+
 def ffmpeg_executable() -> str:
     if getattr(sys, 'frozen', False):
         import imageio_ffmpeg
@@ -89,9 +96,24 @@ class AudioAnalysis(QObject):
             peaks = []
             spectrum = bytearray()
             residual = b""
+            decoded_samples = 0
             last_update = 0.0
+
+            def analyze(pcm):
+                # Keep compact NumPy blocks, rather than millions of Python floats.
+                peak_padding = (-len(pcm)) % WAVEFORM_SAMPLES_PER_PEAK
+                peak_pcm = np.pad(pcm, (0, peak_padding)) if peak_padding else pcm
+                peaks.append(np.max(np.abs(peak_pcm.reshape(-1, WAVEFORM_SAMPLES_PER_PEAK)), axis=1))
+                frame_padding = (-len(pcm)) % SPECTRUM_SAMPLES_PER_FRAME
+                frames = np.pad(pcm, (0, frame_padding)) if frame_padding else pcm
+                frames = frames.reshape(-1, SPECTRUM_SAMPLES_PER_FRAME)
+                padded = np.pad(frames, ((0, 0), (0, 96))) * fft_window
+                power = np.abs(np.fft.rfft(padded, axis=1))[:, 1:129].reshape(-1, 64, 2).max(axis=2)
+                intensity = np.clip((20 * np.log10(power + 1e-7) + 65) * 255 / 65, 0, 255).astype(np.uint8)
+                spectrum.extend(intensity.tobytes())
+
             with tempfile.TemporaryFile() as error_log:
-                self.process = subprocess.Popen([ffmpeg_executable(), "-nostdin", "-v", "error", "-i", self.path, "-map", f"0:a:{self.track}", "-vn", "-ac", "1", "-ar", "16000", "-f", "f32le", "pipe:1"], stdout=subprocess.PIPE, stderr=error_log, **process_options())
+                self.process = subprocess.Popen([ffmpeg_executable(), "-nostdin", "-v", "error", "-i", self.path, "-map", f"0:a:{self.track}", "-vn", "-ac", "1", "-ar", str(AUDIO_SAMPLE_RATE), "-f", "f32le", "pipe:1"], stdout=subprocess.PIPE, stderr=error_log, **process_options())
                 while not self.cancelled.is_set():
                     chunk = self.process.stdout.read(64000)
                     if not chunk:
@@ -101,15 +123,12 @@ class AudioAnalysis(QObject):
                     residual = chunk[frames * 640:]
                     if not frames:
                         continue
-                    pcm = np.frombuffer(chunk[:frames * 640], dtype="<f4").reshape(-1, 160)
-                    peaks.extend(np.max(np.abs(pcm), axis=1).tolist())
-                    padded = np.pad(pcm, ((0, 0), (0, 96))) * fft_window
-                    power = np.abs(np.fft.rfft(padded, axis=1))[:, 1:129].reshape(-1, 64, 2).max(axis=2)
-                    intensity = np.clip((20 * np.log10(power + 1e-7) + 65) * 255 / 65, 0, 255).astype(np.uint8)
-                    spectrum.extend(intensity.tobytes())
+                    pcm = np.frombuffer(chunk[:frames * 640], dtype="<f4")
+                    analyze(pcm)
+                    decoded_samples += len(pcm)
                     now = time.monotonic()
                     if now - last_update > 0.2:
-                        self.progress.emit(min(0.99, len(peaks) * 10 / max(1, self.duration)))
+                        self.progress.emit(min(0.99, decoded_samples * 1000 / AUDIO_SAMPLE_RATE / max(1, self.duration)))
                         last_update = now
                 if self.cancelled.is_set():
                     self.cancel()
@@ -123,7 +142,9 @@ class AudioAnalysis(QObject):
                         self.completed.emit(np.empty(0, dtype=np.float32), np.empty((0, 64), dtype=np.uint8), [])
                         return
                     raise ValueError(error or "В файле нет выбранной аудиодорожки")
-            self.completed.emit(np.asarray(peaks, dtype=np.float32), np.frombuffer(bytes(spectrum), dtype=np.uint8).reshape(-1, 64), [])
+                if residual:
+                    analyze(np.frombuffer(residual, dtype="<f4"))
+            self.completed.emit(np.concatenate(peaks) if peaks else np.empty(0, dtype=np.float32), np.frombuffer(bytes(spectrum), dtype=np.uint8).reshape(-1, 64), [])
         except Exception as exc:
             if not self.cancelled.is_set():
                 self.failed.emit(str(exc))

@@ -9,6 +9,7 @@ NativeDialog {
     property real cropW: 1
     property real cropH: 1
     property real lockedRatio: 0
+    signal glossaryRequested()
     title: "Портрет персонажа — обрезка"
     preferredWidth: 980
     preferredHeight: 760
@@ -19,6 +20,7 @@ NativeDialog {
         let r = backend.captureInfo.crop || [0, 0, 1, 1]
         cropX = r[0]; cropY = r[1]; cropW = r[2]; cropH = r[3]
         lockedRatio = 0; proportions.currentIndex = 0
+        if (!backend.captureInfo.portraitId) setRatio(1)
         recipient.currentIndex = Math.max(0, backend.characterCards.findIndex(c => c.id === backend.captureInfo.cardId) + 1)
         newName.text = ""; primary.checked = backend.captureInfo.primary === undefined ? true : backend.captureInfo.primary
     }
@@ -138,6 +140,18 @@ NativeDialog {
             Label { text: "Персонаж" }
             ComboBox { id: recipient; objectName: "portraitRecipient"; Layout.fillWidth: true; model: ["Создать нового…"].concat(backend.characterCards.map(c => c.name)) }
             DialogTextField { id: newName; objectName: "portraitNewName"; visible: recipient.currentIndex === 0; placeholderText: "Имя нового персонажа"; Layout.preferredWidth: 220 }
+        }
+        RowLayout {
+            Layout.fillWidth: true
+            visible: backend.onlineSession.active && backend.onlineSession.glossarySession.pending
+            Label {
+                Layout.fillWidth: true
+                wrapMode: Text.Wrap
+                text: "Предыдущее изменение глоссария ожидает отправки. " + backend.onlineSession.glossarySession.status
+                color: dialog.colors.warning
+            }
+            Button { objectName: "portraitRetryGlossary"; text: "Повторить отправку"; enabled: !backend.onlineSession.busy; onClicked: backend.onlineSession.glossarySession.retry() }
+            Button { objectName: "portraitOpenGlossary"; text: "Открыть глоссарий…"; onClicked: dialog.glossaryRequested() }
         }
         RowLayout {
             Layout.fillWidth: true

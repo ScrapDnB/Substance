@@ -36,7 +36,7 @@ def main():
         expected_style = "macOS" if sys.platform == "darwin" else "FluentWinUI3"
         if report["style"] != expected_style or report["platform"] != sys.platform:
             raise RuntimeError(f"Unexpected packaged platform or style: {report}")
-        for key in ("ffmpeg", "ffprobe", "libass"):
+        for key in ("ffmpeg", "ffprobe", "libass", "whisper", "speechVAD"):
             path = Path(report.get(key) or "")
             if not path.is_file() or not path.resolve().is_relative_to(dist):
                 raise RuntimeError(f"Missing bundled {key}: {report.get(key)}")
@@ -44,6 +44,8 @@ def main():
             subprocess.run([report[key], "-version"], cwd=temporary, env=environment,
                            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
                            check=True, timeout=30)
+        subprocess.run([report['whisper'], '--help'], cwd=temporary, env=environment,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, check=True, timeout=30)
     print("Packaged QML, platform style, FFmpeg and ffprobe verified", flush=True)
 
 

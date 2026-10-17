@@ -128,8 +128,9 @@ class OnlineGlossary(QObject):
             raise ValueError('Нет прав на изменение портретов в этом проекте')
         if self.online.busy:
             raise ValueError('Дождитесь завершения синхронизации и сохраните портрет ещё раз')
-        if self.pending or self.draft:
-            raise ValueError('Сначала завершите сохранение или разберите черновик в онлайн-глоссарии')
+        if self.pending:
+            raise ValueError('Предыдущее изменение глоссария ещё не отправлено. '
+                             'Повторите отправку и сохраните портрет ещё раз')
         row = next((r for r in self.entries if r['id'] == card_id and r['kind'] == 'character'), None)
         if card_id and not row:
             raise ValueError('Карточка персонажа недоступна. Обновите онлайн-глоссарий')
@@ -143,9 +144,14 @@ class OnlineGlossary(QObject):
                     'portraits': [], 'primary': None, 'extras': {}}}
 
     def _send_portrait(self, draft):
-        if not self.saveDraft(draft) or not self.send():
-            self.online.backend.show_error(self.status or 'Не удалось сохранить портрет')
-            return False
+        # Inspecting a card creates a durable form too. Keep that form (including
+        # real edits and its base revision) separate from this portrait operation.
+        row = next((r for r in self.entries if r['id'] == draft['id']), None)
+        proposal = bool(row and row['data'].get('status') == 'approved' and not self.canApprove)
+        self.repository.enqueue(proposal, draft=draft)
+        self._error = ''
+        self.changed.emit()
+        self.refresh()
         self.online.backend._message = 'Портрет сохранён на компьютере · отправляется в проект'
         self.online.backend.changed.emit()
         return True

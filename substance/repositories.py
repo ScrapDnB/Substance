@@ -30,11 +30,15 @@ def remote_document(snapshot, baseline):
     """Overlay editable fields, preserving server extras and immutable sources."""
     online_client()
     from copy import deepcopy
-    from dubbing_online_client.documents import from_substance, STAMP
+    from dubbing_online_client.documents import authored_document, from_substance, STAMP
     wire, _, _ = from_substance(snapshot)
-    if any(sid not in baseline["source_lines"] for sid in wire["source_lines"]):
+    authoring = baseline.get("metadata", {}).get("authoring") is True
+    if authoring:
+        wire = authored_document(wire, baseline)
+    if not authoring and any(sid not in baseline["source_lines"] for sid in wire["source_lines"]):
         raise ValueError("В онлайн-серии нельзя добавлять новый исходник. Разделяйте существующие реплики.")
-    wire["source_lines"] = deepcopy(baseline["source_lines"])
+    if not authoring:
+        wire["source_lines"] = deepcopy(baseline["source_lines"])
     old = {c["id"]: c for c in baseline["cues"]}
     for cue in wire["cues"]:
         if cue["id"] in old:

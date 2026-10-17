@@ -211,3 +211,18 @@ def test_media_selected_in_substance_survives_remote_refresh(backend, tmp_path, 
     backend.undo()
     assert backend.editor.document.media == {"path": str(video)}
     assert str(video) not in repr(client.wire)
+
+
+def test_project_without_editor_hides_review_for_managers_and_allows_resubmission(backend):
+    online = backend.online
+    online._project_state = {"roles": ["admin"], "review_enabled": False}
+    online._episode_state = {"translation_status": "ready", "review_status": "pending", "revision": 2, "submitted_revision": 1}
+    assert not online.canReview and not online.canAccept and not online.canReturn
+    assert online.canSubmit
+    online._episode_state["submitted_revision"] = 2
+    assert not online.canSubmit
+    online._project_state["review_enabled"] = True
+    assert online.canReview and online.canReturn
+    assert not online.canSubmit
+    online._episode_state["review_status"] = "in_review"
+    assert online.canAccept

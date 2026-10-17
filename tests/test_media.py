@@ -47,9 +47,10 @@ def test_audio_spectrum_metadata_and_keyframes(app, media):
     analysis.run()
     assert not errors
     peaks, spectrum = results[0]
-    assert 190 <= len(peaks) <= 210
+    assert 7900 <= len(peaks) <= 8100
     assert np.max(peaks) > 0.05
-    assert spectrum.shape == (len(peaks), 64)
+    assert 190 <= len(spectrum) <= 210
+    assert spectrum.shape[1] == 64
     assert np.max(spectrum) > 0
     if ffprobe_executable():
         assert metadata[0]['fps'] == 24
@@ -59,6 +60,34 @@ def test_audio_spectrum_metadata_and_keyframes(app, media):
         analysis.completed.connect(keyframes.extend)
         analysis.run()
         assert keyframes[:2] == [0, 1000]
+
+
+def test_waveform_resolves_submillisecond_peaks_and_keeps_final_samples(app, tmp_path):
+    import wave
+
+    # Two transients inside the old 10 ms bin and a partial final analysis frame.
+    samples = np.zeros(16013, dtype='<i2')
+    samples[[8000, 8016, 16012]] = [16384, -24576, 28672]
+    path = tmp_path / 'transients.wav'
+    with wave.open(str(path), 'wb') as audio:
+        audio.setparams((1, 2, 16000, 0, 'NONE', 'not compressed'))
+        audio.writeframes(samples.tobytes())
+    results, errors, progress = [], [], []
+    analysis = AudioAnalysis(str(path), 1001)
+    analysis.completed.connect(lambda peaks, spectrum, frames: results.append((peaks, spectrum)))
+    analysis.failed.connect(errors.append)
+    analysis.progress.connect(progress.append)
+    analysis.run()
+    assert not errors
+    peaks, spectrum = results[0]
+    assert peaks.dtype == np.float32
+    assert len(peaks) == 4004
+    assert spectrum.shape == (101, 64)
+    assert peaks[2000] == pytest.approx(0.5)
+    assert np.all(peaks[2001:2004] == 0)
+    assert peaks[2004] == pytest.approx(0.75)
+    assert peaks[-1] == pytest.approx(0.875)
+    assert progress and 0.98 <= progress[-1] <= 0.99
 
 
 def test_embedded_subtitle_extraction_and_cancellation(app, media):

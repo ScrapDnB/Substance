@@ -38,6 +38,13 @@ class NativeSDKEXE(EXE):
 datas = [(str(root / "substance/qml"), "substance/qml"), (str(root / "substance/resources"), "substance/resources")]
 datas += collect_data_files("imageio_ffmpeg") + collect_data_files("spellchecker")
 binaries = []
+speech_cli = root / 'build/whisper' / ('whisper-cli.exe' if os.name == 'nt' else 'whisper-cli')
+if not speech_cli.is_file():
+    raise RuntimeError('Run scripts/build_whisper.py before packaging')
+binaries.append((str(speech_cli), 'whisper'))
+datas.append((str(root / 'build/whisper/ggml-silero-v6.2.0.bin'), 'whisper'))
+datas.append((str(root / 'build/whisper/LICENSE'), 'substance/resources/licenses/whisper.cpp'))
+datas.append((str(root / 'build/whisper/build.json'), 'substance/resources/licenses/whisper.cpp'))
 libass = os.environ.get("SUBSTANCE_LIBASS")
 if not libass and sys.platform == "darwin":
     libass = next((str(p) for p in (root / 'build/portable/lib/libass.9.dylib', Path('/opt/homebrew/lib/libass.9.dylib'), Path('/usr/local/lib/libass.9.dylib')) if p.is_file()), None)

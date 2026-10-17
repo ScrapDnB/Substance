@@ -207,6 +207,25 @@ def from_substance(snapshot):
     return wire, entries, deepcopy(snapshot.get("images", {}))
 
 
+def authored_document(wire, baseline):
+    """Keep authored text editable while preserving empty server source anchors."""
+    if baseline.get("metadata", {}).get("authoring") is not True:
+        return wire
+    wire = deepcopy(wire)
+    old = {cue["id"]: cue for cue in baseline["cues"]}
+    sources = deepcopy(baseline["source_lines"])
+    for sid, source in wire["source_lines"].items():
+        if sid not in sources:
+            sources[sid] = {**deepcopy(source), "text": ""}
+    wire["source_lines"] = sources
+    for cue in wire["cues"]:
+        cue["original"] = old.get(cue["id"], {}).get("original", "")
+        if cue["translation"] is None:
+            cue["translation"] = cue["text"]
+    wire.setdefault("metadata", {})["authoring"] = True
+    return wire
+
+
 def to_substance(wire):
     """Restore document IO details; project glossary/images are supplied separately."""
     validate_document(wire)
@@ -285,7 +304,7 @@ def validate_document(document):
             len(cue.get(k) or "") > 100_000 for k in ("text", "original", "translation")
         ):
             raise ValueError("Текст реплики превышает 100 000 символов")
-    if not any(
+    if document.get("metadata", {}).get("authoring") is not True and not any(
         not c.get("comment") and (c["text"].strip() or c["original"].strip())
         for c in document["cues"]
     ):

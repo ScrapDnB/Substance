@@ -15,7 +15,17 @@ Pane {
     property int cursorPosition: editTextArea.cursorPosition
     signal editorCursorChanged(int position)
     signal composeRequested(string kind)
-    padding: 16
+    readonly property var appearance: backend.appearance.general
+    readonly property real uiScale: appearance.uiScale / 100
+    readonly property real timecodeFieldWidth: Math.max(120, Math.ceil(timecodeMetrics.advanceWidth) + 24)
+    TextMetrics {
+        id: timecodeMetrics
+        text: "88:88:88.888"
+        font.family: backend.appearance.timecodeFamily
+        font.bold: backend.appearance.timecodeBold
+        font.pixelSize: panel.appearance.timecodeSize
+    }
+    padding: Math.round(12 * uiScale)
     background: Rectangle { color: panel.colors.surface }
 
     function scheduleInheritance() {
@@ -95,149 +105,172 @@ Pane {
         }
     }
 
-    ColumnLayout {
+    ScrollView {
+        id: editorScroll
         anchors.fill: parent
-        spacing: 10
-        RowLayout {
-            Layout.fillWidth: true
-            Image { source: backend.currentPortraitUrl; Layout.preferredWidth: 28; Layout.preferredHeight: 32; fillMode: Image.PreserveAspectCrop; visible: source.toString().length > 0; MouseArea { anchors.fill: parent; onClicked: backend.openCharacters(backend.current.characterId) } }
-            Label { text: backend.current.exists ? "Реплика " + backend.current.number : "Новая реплика"; font.bold: true; font.pixelSize: 16; color: panel.colors.text }
-            Label { visible: backend.current.comment; text: "ASS-комментарий"; color: panel.colors.muted }
-            Item { Layout.fillWidth: true }
-            ControlButton { symbol: "chevron-left"; enabled: backend.currentIndex > 0; onClicked: backend.navigate(-1); hint: "Предыдущая реплика · " + backend.shortcutLabel("previous") }
-            ControlButton { symbol: "chevron-right"; enabled: backend.currentIndex < backend.count - 1; onClicked: backend.navigate(1); hint: "Следующая реплика · " + backend.shortcutLabel("next") }
-        }
-        RowLayout {
-            Layout.fillWidth: true
-            spacing: 10
-            ColumnLayout {
+        clip: true
+        contentWidth: availableWidth
+        ColumnLayout {
+            width: editorScroll.availableWidth
+            height: Math.max(editorScroll.availableHeight, implicitHeight)
+            spacing: Math.round(10 * panel.uiScale)
+            RowLayout {
                 Layout.fillWidth: true
-                spacing: 3
-                Label { text: "Начало"; font.pixelSize: 11; color: panel.colors.muted }
-                TextField { id: startField; objectName: "startField"; Layout.fillWidth: true; Layout.minimumWidth: 120; enabled: backend.current.exists; font.family: backend.isMac ? "Menlo" : "Consolas"; font.pixelSize: 12; selectByMouse: true; onTextEdited: backend.stage("start", text); onEditingFinished: backend.flush(); Accessible.name: "Время начала реплики" }
+                Image { source: backend.currentPortraitUrl; Layout.preferredWidth: 28; Layout.preferredHeight: 32; fillMode: Image.PreserveAspectCrop; visible: source.toString().length > 0; MouseArea { anchors.fill: parent; onClicked: backend.openCharacters(backend.current.characterId) } }
+                Label { text: backend.current.exists ? "Реплика " + backend.current.number : "Новая реплика"; font.bold: true; font.pixelSize: Math.round(16 * panel.uiScale); color: panel.colors.text }
+                Label { visible: backend.current.comment; text: "ASS-комментарий"; color: panel.colors.muted }
+                Item { Layout.fillWidth: true }
+                ControlButton { symbol: "chevron-left"; enabled: backend.currentIndex > 0; onClicked: backend.navigate(-1); hint: "Предыдущая реплика · " + backend.shortcutLabel("previous") }
+                ControlButton { symbol: "chevron-right"; enabled: backend.currentIndex < backend.count - 1; onClicked: backend.navigate(1); hint: "Следующая реплика · " + backend.shortcutLabel("next") }
             }
-            ColumnLayout {
+            GridLayout {
+                objectName: "timecodeFieldsLayout"
                 Layout.fillWidth: true
-                spacing: 3
-                Label { text: "Конец"; font.pixelSize: 11; color: panel.colors.muted }
-                TextField { id: endField; objectName: "endField"; Layout.fillWidth: true; Layout.minimumWidth: 120; enabled: backend.current.exists; font.family: backend.isMac ? "Menlo" : "Consolas"; font.pixelSize: 12; selectByMouse: true; onTextEdited: backend.stage("end", text); onEditingFinished: backend.flush(); Accessible.name: "Время конца реплики" }
-            }
-            ColumnLayout {
-                spacing: 3
-                Label { text: "Длительность"; font.pixelSize: 11; color: panel.colors.muted }
-                Label { text: Number(backend.current.duration || 0).toFixed(3) + " с"; color: panel.colors.text; font.pixelSize: 12; Layout.minimumWidth: 66 }
-            }
-        }
-        RowLayout {
-            Layout.fillWidth: true
-            Label { text: "Персонаж"; color: panel.colors.muted; font.pixelSize: 12 }
-            TextField { id: characterField; Layout.fillWidth: true; placeholderText: "Имя или роль"; enabled: backend.current.exists; onTextEdited: backend.stage("character", text); onEditingFinished: backend.flush(); Accessible.name: "Персонаж" }
-        }
-        RowLayout {
-            Layout.fillWidth: true
-            Layout.fillHeight: true
-            spacing: 12
-            ColumnLayout {
-                visible: panel.translationMode
-                Layout.fillWidth: true
-                Layout.fillHeight: true
-                spacing: 5
-                RowLayout {
+                columnSpacing: 10
+                rowSpacing: 8
+                columns: width >= 2 * panel.timecodeFieldWidth + Math.max(85, durationColumn.implicitWidth) + 20 ? 3 : width >= 2 * panel.timecodeFieldWidth + 10 ? 2 : 1
+                ColumnLayout {
                     Layout.fillWidth: true
-                    Label { text: "Оригинал"; font.pixelSize: 11; color: panel.colors.muted }
-                    Item { Layout.fillWidth: true }
-                    CheckBox {
-                        objectName: "originalAssFormattingToggle"
-                        text: "Показывать оформление"
-                        font.pixelSize: 11
-                        checked: backend.assOriginalFormatted
-                        onClicked: backend.setAssOriginalFormatted(checked)
-                        ToolTip.visible: hovered
-                        ToolTip.text: "Показывать оформление ASS прямо в оригинале. Оригинал доступен только для чтения."
-                    }
+                    spacing: 3
+                    Label { text: "Начало"; font.pixelSize: Math.round(11 * panel.uiScale); color: panel.colors.muted }
+                    TextField { id: startField; objectName: "startField"; Layout.fillWidth: true; Layout.minimumWidth: panel.timecodeFieldWidth; enabled: backend.current.exists; font.family: backend.appearance.timecodeFamily; font.bold: backend.appearance.timecodeBold; font.pixelSize: panel.appearance.timecodeSize; selectByMouse: true; onTextEdited: backend.stage("start", text); onEditingFinished: backend.flush(); Accessible.name: "Время начала реплики" }
                 }
-                ScrollView {
+                ColumnLayout {
                     Layout.fillWidth: true
-                    Layout.fillHeight: true
-                    clip: true
-                    TextArea { id: original; textFormat: TextEdit.PlainText; objectName: "originalEditor"; text: backend.current.original; readOnly: true; selectByMouse: true; wrapMode: TextEdit.Wrap; font.pixelSize: 15; color: panel.colors.muted; Accessible.name: "Оригинальный текст" }
+                    spacing: 3
+                    Label { text: "Конец"; font.pixelSize: Math.round(11 * panel.uiScale); color: panel.colors.muted }
+                    TextField { id: endField; objectName: "endField"; Layout.fillWidth: true; Layout.minimumWidth: panel.timecodeFieldWidth; enabled: backend.current.exists; font.family: backend.appearance.timecodeFamily; font.bold: backend.appearance.timecodeBold; font.pixelSize: panel.appearance.timecodeSize; selectByMouse: true; onTextEdited: backend.stage("end", text); onEditingFinished: backend.flush(); Accessible.name: "Время конца реплики" }
+                }
+                ColumnLayout {
+                    id: durationColumn
+                    spacing: 3
+                    Label { text: "Длительность"; font.pixelSize: Math.round(11 * panel.uiScale); color: panel.colors.muted }
+                    Label { text: Number(backend.current.duration || 0).toFixed(3) + " с"; color: panel.colors.text; font.pixelSize: Math.round(12 * panel.uiScale); Layout.minimumWidth: 66 }
                 }
             }
-            ColumnLayout {
+            RowLayout {
+                Layout.fillWidth: true
+                Label { text: "Персонаж"; color: panel.colors.muted; font.pixelSize: Math.round(12 * panel.uiScale) }
+                TextField { id: characterField; Layout.fillWidth: true; placeholderText: "Имя или роль"; enabled: backend.current.exists; onTextEdited: backend.stage("character", text); onEditingFinished: backend.flush(); Accessible.name: "Персонаж" }
+            }
+            GridLayout {
+                objectName: "editorTextLayout"
                 Layout.fillWidth: true
                 Layout.fillHeight: true
-                spacing: 5
-                RowLayout {
-                    Layout.fillWidth: true
-                    Label { text: panel.translationMode ? "Перевод" : "Текст реплики"; font.pixelSize: 11; color: panel.colors.muted }
-                    Item { Layout.fillWidth: true }
-                    CheckBox {
-                        objectName: "assFormattingToggle"
-                        text: "Показывать оформление"
-                        font.pixelSize: 11
-                        checked: backend.assFormatted
-                        onClicked: backend.setAssFormatted(checked)
-                        ToolTip.visible: hovered
-                        ToolTip.text: "Скрыть коды тегов и показать жирный, курсив, подчёркивание и зачёркивание. Теги остаются в тексте и при копировании. Полное оформление ASS смотрите на видео."
-                    }
-                }
-                RowLayout {
-                    Layout.fillWidth: true
-                    spacing: 4
-                    AssFormatButton { editor: panel; tag: "b"; label: "Жирный"; command: "formatBold" }
-                    AssFormatButton { editor: panel; tag: "i"; label: "Курсив"; command: "formatItalic" }
-                    AssFormatButton { editor: panel; tag: "u"; label: "Подчёркивание"; command: "formatUnderline" }
-                    AssFormatButton { editor: panel; tag: "s"; label: "Зачёркивание" }
-                    Item { Layout.fillWidth: true }
-                }
-                ScrollView {
+                Layout.minimumHeight: panel.translationMode && backend.appearance.translation.originalBelow ? 200 : 120
+                Layout.preferredHeight: Layout.minimumHeight
+                columns: panel.translationMode && !backend.appearance.translation.originalBelow ? 2 : 1
+                columnSpacing: 12
+                rowSpacing: 8
+                ColumnLayout {
+                    visible: panel.translationMode
                     Layout.fillWidth: true
                     Layout.fillHeight: true
-                    clip: true
-                    TextArea {
-                        id: editTextArea
-                        objectName: "subtitleEditor"
-                        textFormat: TextEdit.PlainText
-                        enabled: backend.current.exists
-                        placeholderText: panel.translationMode ? "Введите перевод…" : "Введите текст…"
-                        wrapMode: TextEdit.Wrap
-                        selectByMouse: true
-                        font.pixelSize: 16
-                        color: panel.colors.text
-                        onTextChanged: panel.stageText()
-                        onCursorPositionChanged: panel.editorCursorChanged(cursorPosition)
-                        Accessible.name: panel.translationMode ? "Текст перевода" : "Текст реплики"
+                    spacing: 5
+                    RowLayout {
+                        Layout.fillWidth: true
+                        Label { text: "Оригинал"; font.pixelSize: Math.round(11 * panel.uiScale); color: panel.colors.muted }
+                        Item { Layout.fillWidth: true }
+                        CheckBox {
+                            objectName: "originalAssFormattingToggle"
+                            text: "Показывать оформление"
+                            font.pixelSize: Math.round(11 * panel.uiScale)
+                            checked: backend.assOriginalFormatted
+                            onClicked: backend.setAssOriginalFormatted(checked)
+                            ToolTip.visible: hovered
+                            ToolTip.text: "Показывать оформление ASS прямо в оригинале. Оригинал доступен только для чтения."
+                        }
+                    }
+                    ScrollView {
+                        Layout.fillWidth: true
+                        Layout.fillHeight: true
+                        Layout.minimumHeight: 48
+                        clip: true
+                        DialogTextArea { id: original; textFormat: TextEdit.PlainText; objectName: "originalEditor"; text: backend.current.original; readOnly: true; selectByMouse: true; wrapMode: TextEdit.Wrap; font.pixelSize: panel.appearance.originalFont; font.family: panel.appearance.textFamily || panel.font.family; color: panel.colors.editorText; palette.base: panel.colors.editorBackground
+     Accessible.name: "Оригинальный текст" }
+                    }
+                }
+                ColumnLayout {
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    spacing: 5
+                    RowLayout {
+                        Layout.fillWidth: true
+                        Label { text: panel.translationMode ? "Перевод" : "Текст реплики"; font.pixelSize: Math.round(11 * panel.uiScale); color: panel.colors.muted }
+                        Item { Layout.fillWidth: true }
+                        CheckBox {
+                            objectName: "assFormattingToggle"
+                            text: "Показывать оформление"
+                            font.pixelSize: Math.round(11 * panel.uiScale)
+                            checked: backend.assFormatted
+                            onClicked: backend.setAssFormatted(checked)
+                            ToolTip.visible: hovered
+                            ToolTip.text: "Скрыть коды тегов и показать жирный, курсив, подчёркивание и зачёркивание. Теги остаются в тексте и при копировании. Полное оформление ASS смотрите на видео."
+                        }
+                    }
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: 4
+                        AssFormatButton { editor: panel; tag: "b"; label: "Жирный"; command: "formatBold" }
+                        AssFormatButton { editor: panel; tag: "i"; label: "Курсив"; command: "formatItalic" }
+                        AssFormatButton { editor: panel; tag: "u"; label: "Подчёркивание"; command: "formatUnderline" }
+                        AssFormatButton { editor: panel; tag: "s"; label: "Зачёркивание" }
+                        Item { Layout.fillWidth: true }
+                    }
+                    ScrollView {
+                        Layout.fillWidth: true
+                        Layout.fillHeight: true
+                        Layout.minimumHeight: 48
+                        clip: true
+                        DialogTextArea {
+                            id: editTextArea
+                            objectName: "subtitleEditor"
+                            textFormat: TextEdit.PlainText
+                            enabled: backend.current.exists
+                            placeholderText: panel.translationMode ? "Введите перевод…" : "Введите текст…"
+                            wrapMode: TextEdit.Wrap
+                            selectByMouse: true
+                            font.pixelSize: panel.appearance.editorFont
+                            font.family: panel.appearance.textFamily || panel.font.family
+                            color: panel.colors.editorText
+                            palette.base: panel.colors.editorBackground
+                            selectionColor: panel.colors.selection
+                            selectedTextColor: panel.colors.selectedText
+                            onTextChanged: panel.stageText()
+                            onCursorPositionChanged: panel.editorCursorChanged(cursorPosition)
+                            Accessible.name: panel.translationMode ? "Текст перевода" : "Текст реплики"
+                        }
                     }
                 }
             }
-        }
-        RowLayout {
-            Layout.fillWidth: true
-            Button { text: "Заметки и правки" + (backend.currentReviews.length ? " · " + backend.currentReviews.filter(r => r.state === "open").length : ""); enabled: backend.current.exists && !backend.onlineSession.active; onClicked: backend.openReviews() }
-            Button { text: "+ Заметка"; enabled: backend.current.exists && !backend.onlineSession.active; onClicked: panel.composeRequested("note") }
-            Button { text: "Предложить правку"; enabled: backend.current.exists && !backend.onlineSession.active; onClicked: panel.composeRequested("proposal") }
-            Item { Layout.fillWidth: true }
-            Button { text: "Карточка"; flat: true; onClicked: backend.openCharacters(backend.current.characterId || "") }
-        }
-        Label {
-            Layout.fillWidth: true
-            visible: backend.currentReviews.some(r => r.state === "open")
-            text: { let entry = backend.currentReviews.find(r => r.state === "open"); return entry ? (entry.kind === "note" ? "✎ " : "↔ ") + (entry.text || entry.replacement.replace(/\\N/g, " ")) : "" }
-            textFormat: Text.PlainText; color: panel.colors.muted; font.pixelSize: 11; elide: Text.ElideRight
-        }
-        RowLayout {
-            Layout.fillWidth: true
-            Label { text: backend.current.cps + " зн/с"; color: backend.reviewSettings.readingSpeed && backend.current.cps > backend.cpsLimit ? panel.colors.warning : panel.colors.muted; font.pixelSize: 12 }
-            Label { text: (backend.current.maxLine || 0) + " / " + backend.lineLimit; color: panel.colors.muted; font.pixelSize: 12 }
-            Item { Layout.fillWidth: true }
-            ControlButton { objectName: "playCueButton"; symbol: "play"; enabled: backend.media.hasMedia && backend.current.exists; onClicked: backend.playCurrent(false); hint: "Воспроизвести реплику · " + backend.shortcutLabel("playLine") }
-            ControlButton {
-                objectName: "applyCueButton"
-                text: (panel.translationMode ? "Следующая реплика" : "Применить") + "  " + backend.shortcutLabel("apply")
-                enabled: backend.current.exists
-                highlighted: true
-                palette.buttonText: Qt.platform.os !== "osx" || (Window.active && enabled) ? panel.colors.selectedText : panel.colors.text
-                onClicked: backend.apply(panel.translationMode)
+            RowLayout {
+                Layout.fillWidth: true
+                Button { text: "Заметки и правки" + (backend.currentReviews.length ? " · " + backend.currentReviews.filter(r => r.state === "open").length : ""); enabled: backend.current.exists && !backend.onlineSession.active; onClicked: backend.openReviews() }
+                Button { text: "+ Заметка"; enabled: backend.current.exists && !backend.onlineSession.active; onClicked: panel.composeRequested("note") }
+                Button { text: "Предложить правку"; enabled: backend.current.exists && !backend.onlineSession.active; onClicked: panel.composeRequested("proposal") }
+                Item { Layout.fillWidth: true }
+                Button { text: "Карточка"; flat: true; onClicked: backend.openCharacters(backend.current.characterId || "") }
+            }
+            Label {
+                Layout.fillWidth: true
+                visible: backend.currentReviews.some(r => r.state === "open")
+                text: { let entry = backend.currentReviews.find(r => r.state === "open"); return entry ? (entry.kind === "note" ? "✎ " : "↔ ") + (entry.text || entry.replacement.replace(/\\N/g, " ")) : "" }
+                textFormat: Text.PlainText; color: panel.colors.muted; font.pixelSize: Math.round(11 * panel.uiScale); elide: Text.ElideRight
+            }
+            RowLayout {
+                Layout.fillWidth: true
+                Label { text: backend.current.cps + " зн/с"; color: backend.reviewSettings.readingSpeed && backend.current.cps > backend.cpsLimit ? panel.colors.warning : panel.colors.muted; font.pixelSize: Math.round(12 * panel.uiScale) }
+                Label { text: (backend.current.maxLine || 0) + " / " + backend.lineLimit; color: panel.colors.muted; font.pixelSize: Math.round(12 * panel.uiScale) }
+                Item { Layout.fillWidth: true }
+                ControlButton { objectName: "playCueButton"; symbol: "play"; enabled: backend.media.hasMedia && backend.current.exists; onClicked: backend.playCurrent(false); hint: "Воспроизвести реплику · " + backend.shortcutLabel("playLine") }
+                ControlButton {
+                    objectName: "applyCueButton"
+                    text: (panel.translationMode ? "Следующая реплика" : "Применить") + "  " + backend.shortcutLabel("apply")
+                    enabled: backend.current.exists
+                    highlighted: true
+                    palette.buttonText: Qt.platform.os !== "osx" || (Window.active && enabled) ? panel.colors.accentText : panel.colors.text
+                    onClicked: backend.apply(panel.translationMode)
+                }
             }
         }
     }

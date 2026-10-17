@@ -96,6 +96,7 @@ class MacOSIntegration(QObject):
     nativeToolbarActiveChanged = Signal()
     platformPaletteChanged = Signal()
     sidebarRequested = Signal()
+    settingsRequested = Signal()
     MODE = 'substance.mode'
     SIDEBAR = 'substance.sidebar'
     ACTIONS = {
@@ -107,7 +108,8 @@ class MacOSIntegration(QObject):
         'substance.undo': ('Отменить', 'arrow.uturn.backward', 'undo'),
         'substance.redo': ('Повторить', 'arrow.uturn.forward', 'redo'),
         'substance.media': ('Открыть видео или аудио…', 'film', 'openMedia'),
-        'substance.play': ('Воспроизведение', 'play.fill', None),
+        'substance.transcribe': ('Распознать речь…', 'captions.bubble', 'openTranscription'),
+        'substance.settings': ('Настройки…', 'gearshape', None),
         'substance.export': ('Экспорт…', 'square.and.arrow.up', 'exportDialog'),
     }
 
@@ -181,7 +183,7 @@ class MacOSIntegration(QObject):
         return [self.SIDEBAR, flexible, self.MODE, flexible,
                 'substance.new', 'substance.open', 'substance.save', space,
                 'substance.undo', 'substance.redo', space,
-                'substance.media', 'substance.play', space, 'substance.export']
+                'substance.media', 'substance.transcribe', space, 'substance.export', 'substance.settings']
 
     def configure(self, window):
         if sys.platform != 'darwin' or QGuiApplication.platformName() != 'cocoa' or self._active:
@@ -195,7 +197,7 @@ class MacOSIntegration(QObject):
             self._content_pointer = int(objc.pyobjc_id(ns_window.contentView()))
             self._parent_pointer = int(objc.pyobjc_id(view.superview()))
             # A new layout identifier avoids restoring the previous default order.
-            toolbar = NSToolbar.alloc().initWithIdentifier_('dev.scrapdnb.substance.toolbar.v3')
+            toolbar = NSToolbar.alloc().initWithIdentifier_('dev.scrapdnb.substance.toolbar.v5')
             delegate = _SubstanceToolbarDelegate.alloc().initWithOwner_(self)
             toolbar.setDelegate_(delegate)
             toolbar.setDisplayMode_(NSToolbarDisplayModeIconOnly)
@@ -222,14 +224,14 @@ class MacOSIntegration(QObject):
             log.exception('Could not attach the native toolbar; using the Qt toolbar')
 
     def enabled(self, key):
+        if key == 'substance.transcribe':
+            return not self.backend.busy
         if key in ('substance.new', 'substance.open') or key == self.MODE:
             return not self.backend.busy
         if key == 'substance.undo':
             return self.backend.canUndo or self.backend.dirty
         if key == 'substance.redo':
             return self.backend.canRedo
-        if key == 'substance.play':
-            return self.backend.media_controller.hasMedia
         return True
 
     def perform(self, key):
@@ -237,8 +239,8 @@ class MacOSIntegration(QObject):
             return
         if key == self.SIDEBAR:
             self.sidebarRequested.emit()
-        elif key == 'substance.play':
-            self.backend.media_controller.toggle()
+        elif key == 'substance.settings':
+            self.settingsRequested.emit()
         elif key == 'substance.export':
             self.backend.exportDialog(False)
         else:
@@ -255,13 +257,6 @@ class MacOSIntegration(QObject):
         # Include overflow items, which AppKit does not validate automatically.
         for key, item in self._delegate.items.items():
             item.setEnabled_(self.enabled(key))
-        play = self._delegate.items.get('substance.play')
-        if play is not None:
-            playing = self.backend.media_controller.playing
-            label = 'Пауза' if playing else 'Воспроизведение'
-            play.setImage_(toolbar_symbol('pause.fill' if playing else 'play.fill', label))
-            play.setLabel_(label)
-            play.setToolTip_(label)
 
     def sync_appearance(self):
         if self._window is None:

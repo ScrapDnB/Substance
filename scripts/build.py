@@ -8,6 +8,8 @@ root = Path(__file__).resolve().parents[1]
 os.chdir(root)
 os.environ.setdefault("PYINSTALLER_CONFIG_DIR", str(root / "build/pyinstaller-cache"))
 output_dir = Path(os.environ.get("SUBSTANCE_BUILD_DIST", str(root / "dist"))).resolve()
+from build_whisper import prepare_whisper
+prepare_whisper(root)
 if sys.platform == 'darwin':
     from build_macos_bootloader import prepare_bootloader
     prepare_bootloader(root)

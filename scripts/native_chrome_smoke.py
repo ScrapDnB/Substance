@@ -72,6 +72,18 @@ def main():
         print('Showing window', flush=True)
         wait(250)
         check(chrome.nativeToolbarActive, 'Real NSToolbar attached')
+        identifiers = chrome.diagnostics(window)['nativeToolbarItems']
+        media_index = identifiers.index('substance.media')
+        check(identifiers[media_index + 1] == 'substance.transcribe', 'Recognition icon immediately follows video')
+        check(chrome._delegate.items['substance.transcribe'].image() is not None, 'Recognition uses a real SF Symbol')
+        chrome.perform('substance.transcribe')
+        wait(100)
+        recognition = window.findChild(QObject, 'transcriptionDialog')
+        check(recognition.isVisible(), 'Native recognition action opens timing settings')
+        output = root / 'build/qa/asr-timing'
+        output.mkdir(parents=True, exist_ok=True)
+        recognition.grabWindow().save(str(output / 'timing-settings-native.png'))
+        recognition.close()
         check(all(chrome.diagnostics(window)[key] for key in ('qtContentViewPreserved', 'qtViewParentPreserved')), 'Qt content view and parent preserved')
         backend.select(3, 0)
         wait(80)

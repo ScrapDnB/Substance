@@ -58,11 +58,13 @@ class RemoteGlossary:
             state["draft"] = deepcopy(draft)
             self._persist(state)
 
-    def enqueue(self, proposal=False):
+    def enqueue(self, proposal=False, *, draft=None):
+        """Queue a form or an independent change without replacing the open form."""
         with self._lock:
             if self.pending:
                 raise ValueError("Сначала подтвердите сохранённую операцию глоссария")
-            draft = self.state["draft"]
+            independent = draft is not None
+            draft = deepcopy(draft) if independent else self.state["draft"]
             if not draft.get("data", {}).get("name", "").strip():
                 raise ValueError("Укажите имя карточки или термина")
             operation = {
@@ -90,7 +92,9 @@ class RemoteGlossary:
                 operation["body"]["base_revision"] = draft["base_revision"]
             self._target(operation)
             state = deepcopy(self.state)
-            state.update(pending=operation, rejected=False, draft={})
+            state.update(pending=operation, rejected=False)
+            if not independent:
+                state["draft"] = {}
             self._persist(state)  # a failed disk write prevents sending
 
     def _target(self, operation):

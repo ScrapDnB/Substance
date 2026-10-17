@@ -153,9 +153,11 @@ def main():
     if args.diagnostics:
         from .media import ffmpeg_executable, ffprobe_executable
         from .visuals import libass_path
+        from .transcription import whisper_executable, vad_model_path
         report = {"version": __version__, "platform": sys.platform, "style": QQuickStyle.name(),
                   "applicationActive": app.applicationState() == Qt.ApplicationState.ApplicationActive, "windowActive": window.isActive(),
-                  "ffmpeg": ffmpeg_executable(), "ffprobe": ffprobe_executable(),
+                  "ffmpeg": ffmpeg_executable(), "ffprobe": ffprobe_executable(), "whisper": whisper_executable(),
+                  "speechVAD": str(vad_model_path() or ''),
                   "libass": libass_path(), "cues": backend.count, "mode": backend.mode, "selectedLine": backend.currentIndex + 1,
                   "initialSelectionApplied": initial_selection, "pendingDraft": bool(backend.draft), "media": backend.media_controller.path,
                   "videoFrameValid": bool(backend.media_controller._sink and backend.media_controller._sink.videoFrame().isValid()),

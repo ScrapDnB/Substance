@@ -5,14 +5,16 @@ from ctypes.util import find_library
 from pathlib import Path
 import os
 import sys
+import math
 
 import numpy as np
-from PySide6.QtCore import QObject, Property, QRectF, Qt, Signal, Slot
-from PySide6.QtGui import QColor, QImage, QPainter, QPen, QFont
+from PySide6.QtCore import QObject, Property, QPointF, QRectF, Qt, Signal, Slot
+from PySide6.QtGui import QColor, QImage, QPainter, QPainterPath, QPen, QFont, QPolygonF
 from PySide6.QtQml import QmlElement
 from PySide6.QtQuick import QQuickPaintedItem
 from . import tooltips  # Register native tooltip descriptions in Substance 1.0.
 from . import sidebar  # Register the AppKit navigation layout slot.
+from .media import WAVEFORM_PEAK_MS, SPECTRUM_FRAME_MS
 
 QML_IMPORT_NAME = "Substance"
 QML_IMPORT_MAJOR_VERSION = 1
@@ -176,10 +178,35 @@ class AssOverlay(QQuickPaintedItem):
             self.renderer.close()
 
 
+def waveform_envelope(peaks, view_ms, span_ms, columns):
+    """Reduce to display pixels without losing short transients or stretching EOF."""
+    values = np.zeros(columns, dtype=np.float32)
+    if not len(peaks) or not columns:
+        return values
+    edges = (view_ms + np.linspace(0, span_ms, columns + 1)) / WAVEFORM_PEAK_MS
+    if span_ms / columns < WAVEFORM_PEAK_MS:
+        # Interpolate only when the display is finer than the analyzed data.
+        centers = (edges[:-1] + edges[1:]) / 2
+        first = max(0, min(len(peaks) - 1, int(np.floor(edges[0])) - 1))
+        last = max(first + 1, min(len(peaks), int(np.ceil(edges[-1])) + 1))
+        values[:] = np.interp(centers - 0.5, np.arange(first, last), peaks[first:last])
+        values[(centers < 0) | (centers >= len(peaks))] = 0
+    else:
+        bounds = np.floor(edges).astype(np.int64)
+        valid = (bounds[:-1] < len(peaks)) & (bounds[1:] > 0)
+        starts = np.clip(bounds[:-1][valid], 0, len(peaks))
+        stops = np.clip(bounds[1:][valid], 0, len(peaks))
+        if len(starts):
+            values[valid] = np.maximum.reduceat(peaks[starts[0]:stops[-1]], starts - starts[0])
+    return values
+
+
 @QmlElement
 class Waveform(QQuickPaintedItem):
     changed = Signal()
+    displayChanged = Signal()
     paletteColorsChanged = Signal()
+    timecodeFontChanged = Signal()
     seekRequested = Signal(int)
     rangeRequested = Signal(int, int)
     viewChanged = Signal()
@@ -189,10 +216,14 @@ class Waveform(QQuickPaintedItem):
         self._media = None
         self._start, self._end, self._view, self._span = 0, 2000, 0, 10000
         self._dark, self._spectral, self._snap = False, False, True
+        self._wave_gain, self._spectral_contrast = 1.0, 1.0
         self._drag = ""
         self._anchor = 0
         self._neighbors = []
         self._palette_colors = {}
+        self._wave_cache = None
+        self._wave_cache_peaks = None
+        self._timecode_font = QFont("Menlo" if sys.platform == "darwin" else "Consolas", 9)
         self.setAcceptedMouseButtons(Qt.MouseButton.LeftButton | Qt.MouseButton.RightButton)
         self.setAcceptHoverEvents(True)
         self.setAntialiasing(True)
@@ -200,14 +231,66 @@ class Waveform(QQuickPaintedItem):
     def get_media(self):
         return self._media
 
+    @Property(QFont, notify=timecodeFontChanged)
+    def timecodeFont(self):
+        return QFont(self._timecode_font)
+
+    @timecodeFont.setter
+    def timecodeFont(self, value):
+        if self._timecode_font != value:
+            self._timecode_font = QFont(value)
+            self.timecodeFontChanged.emit()
+            self.update()
+
     def set_media(self, value):
         self._media = value
         if value:
-            value.analysisChanged.connect(self.update)
+            value.analysisChanged.connect(self._analysis_changed)
             value.positionChanged.connect(self.update)
         self.update()
 
     media = Property(QObject, get_media, set_media, notify=changed)
+
+    def _analysis_changed(self):
+        self._wave_cache = None
+        self._wave_cache_peaks = None
+        self.update()
+
+    def _waveform_image(self, w, body_top, body_bottom, pixel_ratio, color):
+        if body_bottom <= body_top:
+            return QImage()
+        peaks = self._media.peaks
+        columns = max(1, math.ceil(w * pixel_ratio))
+        key = (self._view, self._span, w, body_top, body_bottom, pixel_ratio, self._wave_gain, color.rgba())
+        if self._wave_cache is not None and self._wave_cache[0] == key and self._wave_cache_peaks is peaks:
+            return self._wave_cache[1]
+        values = waveform_envelope(peaks, self._view, self._span, columns)
+        mid = (body_bottom - body_top) / 2
+        amp = max(0, (body_bottom - body_top) / 2 - 3)
+        heights = np.minimum(1, values * self._wave_gain) * amp
+        xs = (np.arange(columns) + 0.5) * w / columns
+        points = [QPointF(0, mid - heights[0])]
+        points.extend(QPointF(x, mid - y) for x, y in zip(xs, heights))
+        points.extend((QPointF(w, mid - heights[-1]), QPointF(w, mid + heights[-1])))
+        points.extend(QPointF(x, mid + y) for x, y in zip(xs[::-1], heights[::-1]))
+        points.append(QPointF(0, mid + heights[0]))
+        path = QPainterPath()
+        path.addPolygon(QPolygonF(points))
+        path.closeSubpath()
+        # Playback only moves the cursor: reuse the rasterized contour until
+        # its data, scale, gain, geometry, screen density, or color changes.
+        picture = QImage(columns, math.ceil((body_bottom - body_top) * pixel_ratio), QImage.Format.Format_ARGB32_Premultiplied)
+        picture.setDevicePixelRatio(pixel_ratio)
+        picture.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(picture)
+        try:
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+            painter.fillPath(path, color)
+        finally:
+            painter.end()
+        self._wave_cache_peaks = peaks
+        self._wave_cache = (key, picture)
+        return picture
 
     def scalar(name, typ, signal):
         def getter(self):
@@ -224,6 +307,32 @@ class Waveform(QQuickPaintedItem):
     spectral = scalar("spectral", bool, changed)
     snap = scalar("snap", bool, changed)
     span = scalar("span", int, changed)
+
+    @Property(float, notify=displayChanged)
+    def waveGain(self):
+        return self._wave_gain
+
+    @waveGain.setter
+    def waveGain(self, value):
+        if math.isfinite(value):
+            value = max(0.25, min(8.0, value))
+            if self._wave_gain != value:
+                self._wave_gain = value
+                self.displayChanged.emit()
+                self.update()
+
+    @Property(float, notify=displayChanged)
+    def spectralContrast(self):
+        return self._spectral_contrast
+
+    @spectralContrast.setter
+    def spectralContrast(self, value):
+        if math.isfinite(value):
+            value = max(0.25, min(3.0, value))
+            if self._spectral_contrast != value:
+                self._spectral_contrast = value
+                self.displayChanged.emit()
+                self.update()
 
     @Property(int, notify=viewChanged)
     def viewStart(self):
@@ -244,7 +353,7 @@ class Waveform(QQuickPaintedItem):
 
     @paletteColors.setter
     def paletteColors(self, value):
-        self._palette_colors = {key: QColor(value[key]) for key in ('surface', 'border', 'text', 'muted', 'accent', 'warning') if key in value}
+        self._palette_colors = {key: QColor(value[key]) for key in ('surface', 'border', 'text', 'muted', 'accent', 'warning', 'wave') if key in value}
         self.paletteColorsChanged.emit()
         self.update()
 
@@ -281,22 +390,26 @@ class Waveform(QQuickPaintedItem):
         colors = self._palette_colors
         background = QColor(colors.get('surface', QColor("#1e1e1e" if self._dark else "#ffffff")))
         grid = QColor(colors.get('border', QColor("#444444" if self._dark else "#dddddd")))
-        waveform = QColor(colors.get('text', QColor("#ffffff" if self._dark else "#000000")))
+        waveform = QColor(colors.get('wave', colors.get('text', QColor("#ffffff" if self._dark else "#000000"))))
         waveform.setAlpha(170)
         muted = QColor(colors.get('muted', QColor("#999999" if self._dark else "#666666")))
         accent = QColor(colors.get('accent', QColor("#0a84ff")))
         painter.fillRect(0, 0, w, h, background)
-        painter.setFont(QFont("Menlo" if sys.platform == "darwin" else "Consolas", 9))
-        body_top, body_bottom = 28, h - 12
+        painter.setFont(self._timecode_font)
+        metrics = painter.fontMetrics()
+        body_top, body_bottom = max(28, metrics.height() + 10), h - 12
+        label_baseline = metrics.ascent() + 3
         if self._media and len(self._media.peaks):
             if self._spectral and len(self._media.spectrum):
                 spectrum = self._media.spectrum
-                begin = int(self._view / 10)
-                count = max(1, int(self._span / 10))
+                begin = int(self._view / SPECTRUM_FRAME_MS)
+                count = max(1, int(self._span / SPECTRUM_FRAME_MS))
                 selected = spectrum[max(0, begin):min(len(spectrum), begin + count)]
                 if len(selected):
                     indices = np.minimum(len(selected) - 1, np.linspace(0, len(selected) - 1, w).astype(int))
                     values = selected[indices].T[::-1].astype(np.float32) / 255
+                    # Contrast around the middle of the analyzed dB range.
+                    values = np.clip((values - 0.5) * self._spectral_contrast + 0.5, 0, 1)
                     rgb = np.zeros((64, w, 3), dtype=np.uint8)
                     rgb[:, :, 0] = np.clip(values * 320 - 90, 0, 255)
                     rgb[:, :, 1] = np.clip(values * 280 - 25, 0, 255)
@@ -305,36 +418,29 @@ class Waveform(QQuickPaintedItem):
                     occupied = min(w, round(len(selected) / count * w))
                     painter.drawImage(QRectF(0, body_top, occupied, body_bottom - body_top), picture)
             else:
-                painter.setPen(QPen(waveform, 1))
-                peaks = self._media.peaks
-                mid = (body_top + body_bottom) / 2
-                amp = (body_bottom - body_top) / 2 - 3
-                for x in range(w):
-                    begin = int((self._view + x * self._span / w) / 10)
-                    end = max(begin + 1, int((self._view + (x + 1) * self._span / w) / 10))
-                    if 0 <= begin < len(peaks):
-                        value = min(1, float(np.max(peaks[begin:min(len(peaks), end)])))
-                        painter.drawLine(x, round(mid - value * amp), x, round(mid + value * amp))
+                picture = self._waveform_image(w, body_top, body_bottom, painter.device().devicePixelRatioF(), waveform)
+                painter.drawImage(QRectF(0, body_top, w, body_bottom - body_top), picture)
         selection = QColor(accent)
         selection.setAlpha(55)
         painter.fillRect(QRectF(self._x(self._start), body_top, self._x(self._end) - self._x(self._start), body_bottom - body_top), selection)
         painter.setPen(QPen(grid, 1))
-        step = next((s for s in (100, 250, 500, 1000, 2000, 5000, 10000, 30000, 60000) if s * w / self._span >= 65), 60000)
+        label_width = max(65, painter.fontMetrics().horizontalAdvance("00:00.000") + 10)
+        step = next((s for s in (100, 250, 500, 1000, 2000, 5000, 10000, 30000, 60000) if s * w / self._span >= label_width), 60000)
         first = self._view // step * step
         for ms in range(first, self._view + self._span + step, step):
             x = round(self._x(ms))
-            painter.drawLine(x, 24, x, body_bottom)
+            painter.drawLine(x, body_top - 4, x, body_bottom)
             seconds = ms // 1000
             label = f"{seconds // 60:02}:{seconds % 60:02}" + (f".{ms % 1000:03}" if step < 1000 else "")
             painter.setPen(muted)
-            painter.drawText(x + 4, 17, label)
+            painter.drawText(x + 4, label_baseline, label)
             painter.setPen(QPen(grid, 1))
         painter.setPen(QPen(QColor(colors.get('warning', QColor("#ffb24c"))), 2))
         if self._media:
             for ms in self._media.keyframes:
                 if self._view <= ms <= self._view + self._span:
                     x = round(self._x(ms))
-                    painter.drawLine(x, 23, x, 30)
+                    painter.drawLine(x, body_top - 5, x, body_top + 2)
         painter.setPen(QPen(muted, 1, Qt.PenStyle.DashLine))
         for ms in self._neighbors:
             x = round(self._x(ms))
@@ -347,7 +453,7 @@ class Waveform(QQuickPaintedItem):
         if self._media:
             painter.setPen(QPen(QColor("#ff5a58"), 2))
             x = round(self._x(self._media.position))
-            painter.drawLine(x, 20, x, h)
+            painter.drawLine(x, body_top - 8, x, h)
 
     def mousePressEvent(self, event):
         x = event.position().x()

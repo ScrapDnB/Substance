@@ -34,7 +34,7 @@ ApplicationWindow {
     palette.button: colors.button
     palette.buttonText: colors.text
     palette.highlight: colors.accent
-    palette.highlightedText: colors.selectedText
+    palette.highlightedText: colors.accentText || colors.selectedText
 
     function open() {
         if (!available) return

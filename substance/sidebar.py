@@ -61,6 +61,8 @@ if sys.platform == 'darwin':
             cell = AK.NSTableCellView.alloc().initWithFrame_(AK.NSMakeRect(0, 0, 160, 32))
             text = label(title)
             count = label(str(self.host.backend.counts[key]), True)
+            text.setFont_(AK.NSFont.systemFontOfSize_(12 * self.host.scale))
+            count.setFont_(AK.NSFont.systemFontOfSize_(10 * self.host.scale))
             image = AK.NSImageView.alloc().initWithFrame_(AK.NSMakeRect(0, 0, 16, 16))
             image.setTranslatesAutoresizingMaskIntoConstraints_(False)
             image.setImage_(AK.NSImage.imageWithSystemSymbolName_accessibilityDescription_(symbol, title))
@@ -99,6 +101,7 @@ if sys.platform == 'darwin':
     class _SidebarHost:
         def __init__(self, window, backend):
             self.backend, self.syncing, self.snapshot = backend, False, None
+            self.scale = backend.appearance.general['uiScale'] / 100
             self.qt_view = objc.objc_object(c_void_p=int(window.winId()))
             self.effect = NSClassFromString('NSGlassEffectView').alloc().initWithFrame_(AK.NSMakeRect(0, 0, 0, 0))
             self.effect.setStyle_(0)  # NSGlassEffectViewStyleRegular (macOS 26).
@@ -115,7 +118,7 @@ if sys.platform == 'darwin':
             self.outline.addTableColumn_(column)
             self.outline.setOutlineTableColumn_(column)
             self.outline.setHeaderView_(None)
-            self.outline.setRowHeight_(32)
+            self.outline.setRowHeight_(32 * self.scale)
             self.outline.setIndentationPerLevel_(0)
             self.outline.setSelectionHighlightStyle_(AK.NSTableViewSelectionHighlightStyleSourceList)
             self.outline.setBackgroundColor_(AK.NSColor.clearColor())
@@ -149,17 +152,20 @@ if sys.platform == 'darwin':
             children = [label('ДОКУМЕНТ', True), scroll, label('ПЕРСОНАЖ', True), self.character,
                         separator, label('МЕДИА', True), self.media, self.keyframes, self.open_button,
                         spacer, label('Substance ' + backend.version, True)]
+            self.font_nodes = [(child, child.font().pointSize()) for child in children
+                               if child.respondsToSelector_('font') and child.font()]
             self.stack = AK.NSStackView.stackViewWithViews_(children)
             self.stack.setOrientation_(AK.NSUserInterfaceLayoutOrientationVertical)
             self.stack.setAlignment_(AK.NSLayoutAttributeLeading)
             self.stack.setSpacing_(10)
             self.stack.setTranslatesAutoresizingMaskIntoConstraints_(False)
             self.content.addSubview_(self.stack)
+            self.scroll_height = scroll.heightAnchor().constraintEqualToConstant_(170 * self.scale)
             constraints = [self.stack.leadingAnchor().constraintEqualToAnchor_constant_(self.content.leadingAnchor(), 12),
                            self.stack.trailingAnchor().constraintEqualToAnchor_constant_(self.content.trailingAnchor(), -12),
                            self.stack.topAnchor().constraintEqualToAnchor_constant_(self.content.topAnchor(), 16),
                            self.stack.bottomAnchor().constraintEqualToAnchor_constant_(self.content.bottomAnchor(), -12),
-                           scroll.heightAnchor().constraintEqualToConstant_(170)]
+                           self.scroll_height]
             for child in children:
                 child.setTranslatesAutoresizingMaskIntoConstraints_(False)
                 constraints.append(child.widthAnchor().constraintEqualToAnchor_(self.stack.widthAnchor()))
@@ -173,6 +179,19 @@ if sys.platform == 'darwin':
             self.parent_view.addSubview_positioned_relativeTo_(self.effect, 1, self.qt_view)
             backend.changed.connect(self.sync)
             backend.media_controller.changed.connect(self.sync)
+            backend.appearance.changed.connect(self.sync_appearance)
+            self.sync_appearance()
+            self.sync()
+
+        def sync_appearance(self):
+            if self.effect is None:
+                return
+            self.scale = self.backend.appearance.general['uiScale'] / 100
+            for node, size in self.font_nodes:
+                node.setFont_(AK.NSFont.systemFontOfSize_(size * self.scale))
+            self.outline.setRowHeight_(32 * self.scale)
+            self.scroll_height.setConstant_(170 * self.scale)
+            self.snapshot = None
             self.sync()
 
         def sync(self):
@@ -223,6 +242,7 @@ if sys.platform == 'darwin':
                 return
             self.backend.changed.disconnect(self.sync)
             self.backend.media_controller.changed.disconnect(self.sync)
+            self.backend.appearance.changed.disconnect(self.sync_appearance)
             self.effect.removeFromSuperview()
             self.outline.setDelegate_(None)
             self.outline.setDataSource_(None)

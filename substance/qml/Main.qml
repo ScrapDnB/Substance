@@ -13,17 +13,25 @@ ApplicationWindow {
     property var macOSIntegration: null
     property bool startupChromeReady: true
     readonly property bool nativeToolbar: macOSIntegration !== null && macOSIntegration.nativeToolbarActive
-    readonly property bool modalOpen: settingsDialog.visible || spellingDialog.visible || findDialog.visible
+    readonly property bool modalOpen: transcriptionDialog.visible || settingsDialog.visible || spellingDialog.visible || findDialog.visible
                                      || assTagsDialog.visible || shiftDialog.visible || leadDialog.visible || actorDialog.visible
                                      || onlineConflictDialog.visible || onlineGlossaryDialog.visible || onlineWorkflowDialog.visible || reviewsDialog.visible || reviewCompose.visible || characterDialog.visible || portraitCropDialog.visible
     visible: startupChromeReady
     title: (backend.dirty ? "● " : "") + backend.title + " — Substance"
-    font.pixelSize: 13
+    readonly property real uiScale: backend.appearance.general.uiScale / 100
+    font.pixelSize: Math.round(13 * uiScale)
     SystemPalette { id: systemPalette }
     readonly property var nativeColors: macOSIntegration !== null ? macOSIntegration.platformPalette : ({})
     property bool dark: backend.theme === "dark" || (backend.theme === "system" && systemPalette.window.hslLightness < 0.5)
     property bool sidebarVisible: true
     property int editCursor: 0
+    readonly property var appearance: backend.appearance.general
+    readonly property var editorColors: window.dark ? backend.appearance.darkColors : backend.appearance.lightColors
+    function selectionText(value) {
+        let c = Qt.color(value)
+        function linear(v) { return v <= 0.04045 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4) }
+        return 0.2126 * linear(c.r) + 0.7152 * linear(c.g) + 0.0722 * linear(c.b) > 0.179 ? "#17191d" : "#ffffff"
+    }
     property var colors: ({
         dark: window.dark,
         text: nativeColors.text || systemPalette.text,
@@ -34,9 +42,13 @@ ApplicationWindow {
         header: nativeColors.header || systemPalette.button,
         button: nativeColors.button || systemPalette.button,
         border: nativeColors.border || systemPalette.mid,
-        selection: nativeColors.selection || systemPalette.highlight,
-        selectedText: nativeColors.selectedText || systemPalette.highlightedText,
-        accent: nativeColors.accent || systemPalette.highlight,
+        selection: appearance.selectionColor || nativeColors.selection || systemPalette.highlight,
+        selectedText: appearance.selectionColor ? selectionText(appearance.selectionColor) : nativeColors.selectedText || systemPalette.highlightedText,
+        accent: appearance.accentColor || nativeColors.accent || systemPalette.highlight,
+        accentText: appearance.accentColor ? selectionText(appearance.accentColor) : nativeColors.selectedText || systemPalette.highlightedText,
+        wave: appearance.waveColor || nativeColors.text || systemPalette.text,
+        editorBackground: editorColors.editorBackground || nativeColors.surface || systemPalette.base,
+        editorText: editorColors.editorText || nativeColors.text || systemPalette.text,
         warning: nativeColors.warning || (window.dark ? "#fbbb66" : "#ad6416"),
         success: nativeColors.success || (window.dark ? "#7ed6a4" : "#228657")
     })
@@ -47,10 +59,11 @@ ApplicationWindow {
     palette.buttonText: colors.text
     palette.button: colors.button
     palette.highlight: colors.accent
-    palette.highlightedText: colors.selectedText
+    palette.highlightedText: appearance.accentColor ? selectionText(appearance.accentColor) : nativeColors.selectedText || systemPalette.highlightedText
     color: colors.surface
 
     function closeAuxiliaryWindows() {
+        transcriptionDialog.close()
         assTagsDialog.close()
         notification.close()
         onlineConflictDialog.close()
@@ -78,6 +91,7 @@ ApplicationWindow {
     Connections {
         target: window.macOSIntegration
         function onSidebarRequested() { window.sidebarVisible = !window.sidebarVisible }
+        function onSettingsRequested() { settingsDialog.open() }
     }
 
     Action { id: newAction; text: "Новый документ"; shortcut: backend.shortcuts.new; enabled: !backend.busy; onTriggered: backend.newDocument() }
@@ -139,6 +153,7 @@ ApplicationWindow {
             MenuSeparator { }
             MenuItem { text: "Открыть видео или аудио…"; onTriggered: backend.openMedia() }
             MenuItem { text: "Импорт субтитров из видео…"; onTriggered: backend.importEmbedded() }
+            MenuItem { objectName: "transcriptionMenuItem"; text: "Создать субтитры из аудио…"; enabled: !backend.busy; onTriggered: transcriptionDialog.open() }
             MenuSeparator { }
             MenuItem { action: Action { text: "Закрыть окно"; shortcut: StandardKey.Close; enabled: !window.modalOpen; onTriggered: window.close() } }
             MenuItem { action: quitAction; visible: !backend.isMac }
@@ -232,8 +247,8 @@ ApplicationWindow {
             anchors.rightMargin: 14
             spacing: 10
             ControlButton { symbol: "sidebar"; onClicked: window.sidebarVisible = !window.sidebarVisible; hint: "Показать или скрыть боковую панель" }
-            Label { text: backend.title; font.bold: true; font.pixelSize: 14; color: window.colors.text; elide: Text.ElideRight; Layout.maximumWidth: 280 }
-            Label { text: backend.onlineSession.active ? (backend.dirty ? "Изменено" : backend.onlineSession.pending ? "На компьютере" : "На сервере") : backend.dirty ? "Изменено" : "✓ Сохранено"; color: backend.dirty ? window.colors.muted : window.colors.success; font.pixelSize: 11 }
+            Label { text: backend.title; font.bold: true; font.pixelSize: Math.round(14 * window.uiScale); color: window.colors.text; elide: Text.ElideRight; Layout.maximumWidth: 280 }
+            Label { text: backend.onlineSession.active ? (backend.dirty ? "Изменено" : backend.onlineSession.pending ? "На компьютере" : "На сервере") : backend.dirty ? "Изменено" : "✓ Сохранено"; color: backend.dirty ? window.colors.muted : window.colors.success; font.pixelSize: Math.round(11 * window.uiScale) }
             Item { Layout.fillWidth: true }
             SegmentedSelector {
                 id: modeTabs
@@ -250,22 +265,30 @@ ApplicationWindow {
                 background: Item { }
                 contentItem: RowLayout {
                     spacing: 5
-                    ControlButton { text: "Открыть медиа…"; onClicked: backend.openMedia() }
+                    ControlButton { objectName: "toolbarMedia"; symbol: "video"; hint: "Открыть видео или аудио…"; onClicked: backend.openMedia() }
+                    ControlButton { objectName: "toolbarTranscribe"; symbol: "transcribe"; hint: "Распознать речь…"; onClicked: transcriptionDialog.open() }
                     ControlButton { text: "Экспорт…"; onClicked: backend.exportDialog(false) }
+                    ControlButton { objectName: "toolbarSettings"; symbol: "settings"; onClicked: settingsDialog.open(); hint: "Настройки" }
                 }
             }
         }
     }
 
     SplitView {
+        id: documentSplit
         anchors.fill: parent
         orientation: Qt.Horizontal
         handle: Rectangle { implicitWidth: 1; implicitHeight: 1; color: window.colors.border }
+        onResizingChanged: if (!resizing && sidebarPane.visible) backend.appearance.setValue("general", "sidebarWidth", Math.round(sidebarPane.width))
+        Connections {
+            target: backend.appearance
+            function onChanged() { sidebarPane.SplitView.preferredWidth = Math.max(glassSidebar.active ? 212 : 180, window.appearance.sidebarWidth) }
+        }
         Pane {
             id: sidebarPane
             visible: window.sidebarVisible
-            SplitView.preferredWidth: glassSidebar.active ? 232 : 192
-            SplitView.minimumWidth: glassSidebar.active ? 212 : 156
+            SplitView.preferredWidth: Math.max(glassSidebar.active ? 212 : 180, appearance.sidebarWidth)
+            SplitView.minimumWidth: glassSidebar.active ? 212 : 180
             SplitView.maximumWidth: 340
             padding: 10
             background: Rectangle { color: glassSidebar.active ? window.colors.surface : window.colors.sidebar }
@@ -284,14 +307,14 @@ ApplicationWindow {
                 visible: !glassSidebar.active || window.modalOpen
                 anchors.fill: parent
                 spacing: 4
-                Label { text: "ДОКУМЕНТ"; color: window.colors.muted; font.pixelSize: 10; font.bold: true; Layout.margins: 8 }
+                Label { text: "ДОКУМЕНТ"; color: window.colors.muted; font.pixelSize: Math.round(10 * window.uiScale); font.bold: true; Layout.margins: 8 }
                 Repeater {
                     model: [ {key:"all", title:"Все реплики", symbol:"≡"}, {key:"warnings", title:"Замечания", symbol:"⚠"}, {key:"notes", title:"С заметками", symbol:"✎"}, {key:"proposals", title:"Предложения правок", symbol:"↔"}, {key:"characters", title:"Персонажи", symbol:"♙"} ]
                     delegate: ItemDelegate {
                         id: filterItem
                         required property var modelData
                         Layout.fillWidth: true
-                        implicitHeight: 32
+                        implicitHeight: Math.round(32 * window.uiScale)
                         highlighted: backend.activeFilter === modelData.key
                         background: Rectangle {
                             radius: 6
@@ -302,20 +325,20 @@ ApplicationWindow {
                         contentItem: RowLayout {
                             spacing: 8
                             Label { text: modelData.symbol; color: filterItem.highlighted ? window.colors.selectedText : modelData.key === "warnings" ? window.colors.warning : window.colors.muted; Layout.preferredWidth: 18 }
-                            Label { text: modelData.title; color: filterItem.highlighted ? window.colors.selectedText : window.colors.text; Layout.fillWidth: true; font.pixelSize: 12; elide: Text.ElideRight }
-                            Label { text: backend.counts[modelData.key]; color: filterItem.highlighted ? window.colors.selectedText : window.colors.muted; font.pixelSize: 11 }
+                            Label { text: modelData.title; color: filterItem.highlighted ? window.colors.selectedText : window.colors.text; Layout.fillWidth: true; font.pixelSize: Math.round(12 * window.uiScale); elide: Text.ElideRight }
+                            Label { text: backend.counts[modelData.key]; color: filterItem.highlighted ? window.colors.selectedText : window.colors.muted; font.pixelSize: Math.round(11 * window.uiScale) }
                         }
                     }
                 }
-                Label { text: "ПЕРСОНАЖ"; color: window.colors.muted; font.pixelSize: 10; font.bold: true; Layout.topMargin: 18; Layout.leftMargin: 8 }
+                Label { text: "ПЕРСОНАЖ"; color: window.colors.muted; font.pixelSize: Math.round(10 * window.uiScale); font.bold: true; Layout.topMargin: 18; Layout.leftMargin: 8 }
                 ComboBox { Layout.fillWidth: true; model: ["Все персонажи"].concat(backend.characters); onActivated: backend.setCharacterFilter(currentIndex ? currentText : "") }
                 Rectangle { Layout.fillWidth: true; Layout.topMargin: 14; Layout.bottomMargin: 10; height: 1; color: window.colors.border }
-                Label { text: "МЕДИА"; color: window.colors.muted; font.pixelSize: 10; font.bold: true; Layout.leftMargin: 8 }
-                Label { text: backend.media.name; color: window.colors.text; font.pixelSize: 12; wrapMode: Text.WrapAnywhere; Layout.fillWidth: true; Layout.margins: 8 }
-                Label { text: backend.media.keyframeCount ? backend.media.keyframeCount + " ключевых кадров" : "Ключевые кадры не загружены"; color: window.colors.muted; font.pixelSize: 10; wrapMode: Text.Wrap; Layout.fillWidth: true; Layout.leftMargin: 8 }
+                Label { text: "МЕДИА"; color: window.colors.muted; font.pixelSize: Math.round(10 * window.uiScale); font.bold: true; Layout.leftMargin: 8 }
+                Label { text: backend.media.name; color: window.colors.text; font.pixelSize: Math.round(12 * window.uiScale); wrapMode: Text.WrapAnywhere; Layout.fillWidth: true; Layout.margins: 8 }
+                Label { text: backend.media.keyframeCount ? backend.media.keyframeCount + " ключевых кадров" : "Ключевые кадры не загружены"; color: window.colors.muted; font.pixelSize: Math.round(10 * window.uiScale); wrapMode: Text.Wrap; Layout.fillWidth: true; Layout.leftMargin: 8 }
                 Button { text: "Подключить…"; flat: true; onClicked: backend.openMedia() }
                 Item { Layout.fillHeight: true }
-                Label { text: "Substance " + backend.version; color: window.colors.muted; font.pixelSize: 10; Layout.leftMargin: 8; Layout.bottomMargin: 6 }
+                Label { text: "Substance " + backend.version; color: window.colors.muted; font.pixelSize: Math.round(10 * window.uiScale); Layout.leftMargin: 8; Layout.bottomMargin: 6 }
             }
         }
         Item {
@@ -325,15 +348,17 @@ ApplicationWindow {
                 anchors.centerIn: parent
                 width: Math.min(500, parent.width - 80)
                 spacing: 18
-                Label { text: "Substance"; font.pixelSize: 34; font.weight: Font.DemiBold; color: window.colors.text; Layout.alignment: Qt.AlignHCenter }
-                Label { text: "Текст, перевод и точный тайминг"; font.pixelSize: 16; color: window.colors.muted; Layout.alignment: Qt.AlignHCenter }
+                Label { text: "Substance"; font.pixelSize: Math.round(34 * window.uiScale); font.weight: Font.DemiBold; color: window.colors.text; Layout.alignment: Qt.AlignHCenter }
+                Label { text: "Текст, перевод и точный тайминг"; font.pixelSize: Math.round(16 * window.uiScale); color: window.colors.muted; Layout.alignment: Qt.AlignHCenter }
                 Label { text: "Создайте ASS с нуля или откройте готовые субтитры. Видео и аудио можно подключить в любой момент."; wrapMode: Text.Wrap; horizontalAlignment: Text.AlignHCenter; color: window.colors.muted; Layout.fillWidth: true }
                 RowLayout { Layout.alignment: Qt.AlignHCenter; Button { objectName: "createFirstLine"; text: "Создать субтитры"; highlighted: true; onClicked: backend.addLine() } Button { text: "Открыть файл…"; onClicked: backend.openDialog() } }
+                Button { objectName: "transcribeEmptyDocument"; text: "Распознать речь из видео или аудио…"; Layout.alignment: Qt.AlignHCenter; onClicked: transcriptionDialog.open() }
                 Button { text: "Открыть пример"; flat: true; Layout.alignment: Qt.AlignHCenter; onClicked: backend.openExample() }
-                Label { text: "ASS · SRT · VTT · TXT · .substance\nИли перетащите файл в окно"; color: window.colors.muted; horizontalAlignment: Text.AlignHCenter; font.pixelSize: 11; Layout.alignment: Qt.AlignHCenter }
+                Label { text: "ASS · SRT · VTT · TXT · .substance\nИли перетащите файл в окно"; color: window.colors.muted; horizontalAlignment: Text.AlignHCenter; font.pixelSize: Math.round(11 * window.uiScale); Layout.alignment: Qt.AlignHCenter }
             }
             BusyIndicator { running: backend.busy; anchors.centerIn: parent }
             SplitView {
+                id: mainWorkspace
                 visible: backend.count > 0
                 enabled: !backend.busy
                 anchors.fill: parent
@@ -345,7 +370,20 @@ ApplicationWindow {
                     SplitView.minimumHeight: 350
                     sourceComponent: backend.mode === "timing" ? timingWorkspace : translationWorkspace
                 }
-                AudioPane { visible: backend.mode === "translation"; colors: window.colors; SplitView.preferredHeight: 192; SplitView.minimumHeight: 145; SplitView.maximumHeight: 350 }
+                AudioPane {
+                    id: translationAudio
+                    objectName: "translationAudio"
+                    visible: backend.mode === "translation" && backend.appearance.translation.audioVisible
+                    colors: window.colors
+                    SplitView.preferredHeight: backend.appearance.translation.audioHeight
+                    SplitView.minimumHeight: 145
+                    SplitView.maximumHeight: 350
+                }
+                onResizingChanged: if (!resizing && backend.mode === "translation" && translationAudio.visible) backend.appearance.resizeLayout("translation", {audioHeight: translationAudio.height})
+                Connections {
+                    target: backend.appearance
+                    function onChanged() { translationAudio.SplitView.preferredHeight = backend.appearance.translation.audioHeight }
+                }
             }
         }
     }
@@ -353,39 +391,77 @@ ApplicationWindow {
     Component {
         id: timingWorkspace
         SplitView {
+            id: timingSplit
+            objectName: "timingWorkspace"
+            readonly property var config: backend.appearance.timing
+            property bool ready: false
             orientation: Qt.Vertical
             handle: Rectangle { implicitHeight: 5; color: window.colors.header; Rectangle { width: 40; height: 2; color: window.colors.border; anchors.centerIn: parent } }
-            SplitView {
-                SplitView.preferredHeight: 400
-                SplitView.minimumHeight: 240
-                orientation: Qt.Horizontal
-                handle: Rectangle { implicitWidth: 1; color: window.colors.border }
-                VideoPane { colors: window.colors; SplitView.preferredWidth: workspace.width * 0.47; SplitView.minimumWidth: 280 }
-                CueEditor { colors: window.colors; SplitView.fillWidth: true; SplitView.minimumWidth: 390; onEditorCursorChanged: position => window.editCursor = position; onComposeRequested: kind => reviewCompose.create(kind) }
+            function applyLayout() {
+                if (!ready || resizing || topSplit.resizing) return
+                if (itemAt(1) !== (config.audioPosition === "middle" ? timingAudio : timingTable)) moveItem(2, 1)
+                if (topSplit.itemAt(0) !== (config.videoSide === "left" ? timingVideo : timingEditor)) topSplit.moveItem(1, 0)
+                topSplit.SplitView.preferredHeight = height * config.topPercent / 100
+                timingVideo.SplitView.preferredWidth = width * config.videoPercent / 100
+                timingAudio.SplitView.preferredHeight = config.audioHeight
             }
-            AudioPane { colors: window.colors; SplitView.preferredHeight: 192; SplitView.minimumHeight: 145; SplitView.maximumHeight: 350 }
-            SubtitleTable { colors: window.colors; SplitView.fillHeight: true; SplitView.minimumHeight: 130 }
+            onWidthChanged: Qt.callLater(applyLayout)
+            onHeightChanged: Qt.callLater(applyLayout)
+            Component.onCompleted: { ready = true; Qt.callLater(applyLayout) }
+            Connections { target: backend.appearance; function onChanged() { timingSplit.applyLayout() } }
+            onResizingChanged: if (!resizing && ready) backend.appearance.resizeLayout("timing", {topPercent: topSplit.height / Math.max(1, height) * 100, audioHeight: timingAudio.height})
+            SplitView {
+                id: topSplit
+                objectName: "timingTopSplit"
+                SplitView.minimumHeight: Math.round(320 * window.uiScale)
+                orientation: Qt.Horizontal
+                handle: Rectangle { implicitWidth: 5; color: window.colors.header }
+                onResizingChanged: if (!resizing && timingSplit.ready && timingSplit.config.videoVisible) backend.appearance.resizeLayout("timing", {videoPercent: timingVideo.width / Math.max(1, width) * 100})
+                VideoPane { id: timingVideo; objectName: "timingVideo"; visible: timingSplit.config.videoVisible; colors: window.colors; SplitView.minimumWidth: 230 }
+                CueEditor { id: timingEditor; objectName: "timingEditor"; colors: window.colors; SplitView.fillWidth: true; SplitView.minimumWidth: 390; onEditorCursorChanged: position => window.editCursor = position; onComposeRequested: kind => reviewCompose.create(kind) }
+            }
+            AudioPane { id: timingAudio; objectName: "timingAudio"; visible: timingSplit.config.audioVisible; colors: window.colors; SplitView.minimumHeight: 145; SplitView.maximumHeight: 350 }
+            SubtitleTable { id: timingTable; colors: window.colors; SplitView.fillHeight: true; SplitView.minimumHeight: 100 }
         }
     }
     Component {
         id: translationWorkspace
         SplitView {
+            id: translationSplit
+            objectName: "translationWorkspace"
+            readonly property var config: backend.appearance.translation
+            property bool ready: false
             orientation: Qt.Horizontal
-            handle: Rectangle { implicitWidth: 1; color: window.colors.border }
+            handle: Rectangle { implicitWidth: 5; color: window.colors.header }
+            function applyLayout() {
+                if (!ready || resizing || textSplit.resizing) return
+                if (itemAt(0) !== (config.videoSide === "left" ? contextColumn : textSplit)) moveItem(1, 0)
+                if (textSplit.itemAt(0) !== (config.tableFirst ? translationTable : translationEditor)) textSplit.moveItem(1, 0)
+                contextColumn.SplitView.preferredWidth = width * config.videoPercent / 100
+                translationEditor.SplitView.preferredHeight = config.editorHeight
+            }
+            Component.onCompleted: { ready = true; Qt.callLater(applyLayout) }
+            onWidthChanged: Qt.callLater(applyLayout)
+            Connections { target: backend.appearance; function onChanged() { translationSplit.applyLayout() } }
+            onResizingChanged: if (!resizing && ready && config.videoVisible) backend.appearance.resizeLayout("translation", {videoPercent: contextColumn.width / Math.max(1, width) * 100})
             SplitView {
-                SplitView.preferredWidth: workspace.width * 0.65
+                id: textSplit
+                SplitView.fillWidth: true
                 SplitView.minimumWidth: 460
                 orientation: Qt.Vertical
                 handle: Rectangle { implicitHeight: 5; color: window.colors.header }
-                SubtitleTable { colors: window.colors; SplitView.fillHeight: true; SplitView.minimumHeight: 130 }
-                CueEditor { colors: window.colors; SplitView.preferredHeight: 395; SplitView.minimumHeight: 315; onEditorCursorChanged: position => window.editCursor = position; onComposeRequested: kind => reviewCompose.create(kind) }
+                onResizingChanged: if (!resizing && translationSplit.ready) backend.appearance.resizeLayout("translation", {editorHeight: translationEditor.height})
+                SubtitleTable { id: translationTable; colors: window.colors; SplitView.fillHeight: true; SplitView.minimumHeight: 100 }
+                CueEditor { id: translationEditor; objectName: "translationEditor"; colors: window.colors; SplitView.minimumHeight: 315; onEditorCursorChanged: position => window.editCursor = position; onComposeRequested: kind => reviewCompose.create(kind) }
             }
             ColumnLayout {
-                SplitView.fillWidth: true
-                SplitView.minimumWidth: 250
+                id: contextColumn
+                visible: translationSplit.config.videoVisible
+                SplitView.minimumWidth: 230
                 spacing: 0
-                VideoPane { colors: window.colors; Layout.fillWidth: true; Layout.fillHeight: true; Layout.minimumHeight: 190 }
+                VideoPane { objectName: "translationVideo"; colors: window.colors; Layout.fillWidth: true; Layout.fillHeight: true; Layout.minimumHeight: 150 }
                 Pane {
+                    visible: backend.appearance.translation.contextVisible
                     Layout.fillWidth: true
                     padding: 16
                     background: Rectangle { color: window.colors.surface }
@@ -399,13 +475,13 @@ ApplicationWindow {
                                 required property var modelData
                                 Layout.fillWidth: true
                                 spacing: 3
-                                Label { text: modelData.number + " · " + (modelData.character || "Без персонажа"); font.pixelSize: 10; color: window.colors.muted }
-                                Label { text: modelData.text; color: modelData.active ? window.colors.accent : window.colors.text; wrapMode: Text.Wrap; font.pixelSize: 12; Layout.fillWidth: true; maximumLineCount: 3; elide: Text.ElideRight; textFormat: Text.PlainText }
+                                Label { text: modelData.number + " · " + (modelData.character || "Без персонажа"); font.pixelSize: Math.round(10 * window.uiScale); color: window.colors.muted }
+                                Label { text: modelData.text; color: modelData.active ? window.colors.accent : window.colors.text; wrapMode: Text.Wrap; font.pixelSize: Math.round(12 * window.uiScale); Layout.fillWidth: true; maximumLineCount: 3; elide: Text.ElideRight; textFormat: Text.PlainText }
                             }
                         }
                         Rectangle { Layout.fillWidth: true; height: 1; color: window.colors.border }
                         Label { text: "Проверка реплики"; font.bold: true; color: window.colors.text }
-                        Label { text: backend.current.issues.length ? "⚠ " + backend.current.issues.join("\n⚠ ") : "✓ Читаемость в норме"; color: backend.current.issues.length ? window.colors.warning : window.colors.success; wrapMode: Text.Wrap; Layout.fillWidth: true; font.pixelSize: 12 }
+                        Label { text: backend.current.issues.length ? "⚠ " + backend.current.issues.join("\n⚠ ") : "✓ Читаемость в норме"; color: backend.current.issues.length ? window.colors.warning : window.colors.success; wrapMode: Text.Wrap; Layout.fillWidth: true; font.pixelSize: Math.round(12 * window.uiScale) }
                     }
                 }
             }
@@ -414,9 +490,28 @@ ApplicationWindow {
 
     footer: Rectangle {
         objectName: "documentStatusBar"
-        height: backend.onlineSession.active ? 66 : 30
+        height: 30 + (backend.onlineSession.active ? 36 : 0) + (speechStatus.visible ? 44 : 0)
         color: window.colors.header
         Rectangle { width: parent.width; height: 1; color: window.colors.border }
+        RowLayout {
+            id: speechStatus
+            objectName: "transcriptionProgressRow"
+            visible: backend.transcription.statusVisible
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.bottom: parent.bottom
+            anchors.bottomMargin: 30
+            anchors.leftMargin: 12
+            anchors.rightMargin: 12
+            height: 44
+            spacing: 10
+            Label { text: backend.transcription.status + (backend.transcription.running ? " · Реплик: " + backend.transcription.addedCount : ""); Layout.fillWidth: true; elide: Text.ElideRight; color: backend.transcription.error ? window.colors.warning : window.colors.text }
+            ProgressBar { Layout.preferredWidth: 130; visible: backend.transcription.busy; value: backend.transcription.progress; indeterminate: backend.transcription.busy && backend.transcription.progress === 0 }
+            Button { objectName: "speechStopButton"; text: "Остановить"; visible: backend.transcription.busy; enabled: !backend.transcription.stopping; onClicked: backend.transcription.stop() }
+            Button { objectName: "speechDiscardButton"; text: "Отменить распознавание"; visible: backend.transcription.canDiscard; onClicked: backend.transcription.discard() }
+            Button { text: "Параметры…"; onClicked: transcriptionDialog.open() }
+            Button { text: "Скрыть"; visible: !backend.transcription.busy; onClicked: backend.transcription.dismiss() }
+        }
         RowLayout {
             id: onlineStatus
             objectName: "onlineStatus"
@@ -427,7 +522,7 @@ ApplicationWindow {
             anchors.right: parent.right
             anchors.margins: 6
             height: 30
-            Label { text: backend.onlineSession.status; Layout.fillWidth: true; elide: Text.ElideRight; color: window.colors.text; font.pixelSize: 11 }
+            Label { text: backend.onlineSession.status; Layout.fillWidth: true; elide: Text.ElideRight; color: window.colors.text; font.pixelSize: Math.round(11 * window.uiScale) }
             Button { objectName: "onlineCompareButton"; text: "Сравнить версии…"; visible: backend.onlineSession.conflictSession.available; enabled: !backend.onlineSession.busy; onClicked: onlineConflictDialog.open() }
             Button { objectName: "onlineGlossaryButton"; text: "Глоссарий…"; visible: backend.onlineSession.glossarySession.supported; onClicked: onlineGlossaryDialog.open() }
             Button { text: "Повторить"; enabled: !backend.onlineSession.busy; onClicked: backend.onlineSession.retry() }
@@ -446,10 +541,10 @@ ApplicationWindow {
             anchors.leftMargin: 12
             anchors.rightMargin: 12
             spacing: 16
-            Label { text: backend.current.exists ? backend.current.number + " из " + backend.count : backend.count + " реплик"; color: window.colors.muted; font.pixelSize: 11 }
-            Label { text: "ASS · " + backend.encoding.toUpperCase() + " · " + Number(backend.fps).toFixed(3) + " fps"; color: window.colors.muted; font.pixelSize: 11 }
-            Label { text: backend.selectionCount > 1 ? "Выбрано " + backend.selectionCount : backend.message; Layout.fillWidth: true; color: window.colors.muted; font.pixelSize: 11; elide: Text.ElideRight }
-            Label { text: backend.shortcutLabel("apply") + " — применить"; color: window.colors.muted; font.pixelSize: 10 }
+            Label { text: backend.current.exists ? backend.current.number + " из " + backend.count : backend.count + " реплик"; color: window.colors.muted; font.pixelSize: Math.round(11 * window.uiScale) }
+            Label { text: "ASS · " + backend.encoding.toUpperCase() + " · " + Number(backend.fps).toFixed(3) + " fps"; color: window.colors.muted; font.pixelSize: Math.round(11 * window.uiScale) }
+            Label { text: backend.selectionCount > 1 ? "Выбрано " + backend.selectionCount : backend.message; Layout.fillWidth: true; color: window.colors.muted; font.pixelSize: Math.round(11 * window.uiScale); elide: Text.ElideRight }
+            Label { text: backend.shortcutLabel("apply") + " — применить"; color: window.colors.muted; font.pixelSize: Math.round(10 * window.uiScale) }
         }
     }
 
@@ -463,14 +558,15 @@ ApplicationWindow {
         }
     }
     OnlineConflictDialog { id: onlineConflictDialog; objectName: "onlineConflictDialog"; colors: window.colors }
-    OnlineGlossaryDialog { id: onlineGlossaryDialog; objectName: "onlineGlossaryDialog"; colors: window.colors }
+    OnlineGlossaryDialog { id: onlineGlossaryDialog; objectName: "onlineGlossaryDialog"; transientParent: portraitCropDialog.visible ? portraitCropDialog : window; colors: window.colors }
     OnlineWorkflowDialog { id: onlineWorkflowDialog; objectName: "onlineWorkflowDialog"; colors: window.colors }
     ReviewCompose { id: reviewCompose; objectName: "reviewComposeDialog"; transientParent: reviewsDialog.visible ? reviewsDialog : window; colors: window.colors }
     ReviewsDialog { id: reviewsDialog; objectName: "reviewsDialog"; colors: window.colors; onComposeRequested: kind => reviewCompose.create(kind); onEditRequested: entry => reviewCompose.edit(entry) }
     CharacterDialog { id: characterDialog; objectName: "characterDialog"; colors: window.colors }
-    PortraitCropDialog { id: portraitCropDialog; objectName: "portraitCropDialog"; transientParent: characterDialog.visible ? characterDialog : window; colors: window.colors }
+    PortraitCropDialog { id: portraitCropDialog; objectName: "portraitCropDialog"; transientParent: characterDialog.visible ? characterDialog : window; colors: window.colors; onGlossaryRequested: onlineGlossaryDialog.open() }
     Connections {
         target: backend
+        function onTranscriptionRequested() { transcriptionDialog.open() }
         function onReviewsRequested() { reviewsDialog.open() }
         function onCardsRequested(cardId) {
             if (backend.onlineSession.active && backend.onlineSession.glossarySession.supported) {
@@ -484,6 +580,7 @@ ApplicationWindow {
         function onDocumentReplaced() { onlineConflictDialog.close(); onlineGlossaryDialog.close(); characterDialog.modified = false; characterDialog.close(); portraitCropDialog.close(); reviewsDialog.close(); reviewCompose.close(); onlineWorkflowDialog.close(); actorDialog.close() }
     }
 
+    TranscriptionDialog { id: transcriptionDialog; colors: window.colors }
     SettingsDialog { id: settingsDialog; objectName: "settingsDialog"; colors: window.colors }
 
     NativeDialog {
@@ -521,7 +618,7 @@ ApplicationWindow {
                     ControlButton { symbol: "plus"; onClicked: backend.ignoreSpelling(modelData.word); hint: "Добавить в словарь" }
                 }
             }
-            Label { text: "Проверка выполняется локально. Имена персонажей исключены из словаря ошибок."; color: window.colors.muted; wrapMode: Text.Wrap; Layout.fillWidth: true; font.pixelSize: 11 }
+            Label { text: "Проверка выполняется локально. Имена персонажей исключены из словаря ошибок."; color: window.colors.muted; wrapMode: Text.Wrap; Layout.fillWidth: true; font.pixelSize: Math.round(11 * window.uiScale) }
         }
     }
 
@@ -539,7 +636,39 @@ ApplicationWindow {
             spacing: 12
             DialogTextField { id: findInput; Layout.fillWidth: true; placeholderText: "Найти"; onAccepted: backend.setSearch(text, caseSensitive.checked, regex.checked) }
             DialogTextField { id: replacementInput; visible: findDialog.replaceMode; Layout.fillWidth: true; placeholderText: "Заменить на" }
-            RowLayout { CheckBox { id: caseSensitive; text: "Учитывать регистр" } CheckBox { id: regex; text: "Регулярное выражение" } }
+            RowLayout {
+                CheckBox { id: caseSensitive; text: "Учитывать регистр" }
+                CheckBox { id: regex; text: "Регулярное выражение" }
+                Label {
+                    id: regexHelp
+                    objectName: "regexHelp"
+                    text: "?"
+                    Layout.preferredWidth: Math.round(22 * window.uiScale)
+                    Layout.preferredHeight: Layout.preferredWidth
+                    horizontalAlignment: Text.AlignHCenter
+                    verticalAlignment: Text.AlignVCenter
+                    color: window.colors.muted
+                    Accessible.name: "Помощь: регулярные выражения"
+                    Accessible.description: regexHelpTip.text
+                    background: Rectangle {
+                        color: "transparent"
+                        radius: width / 2
+                        border.color: window.colors.muted
+                    }
+                    NativeToolTip {
+                        id: regexHelpTip
+                        objectName: "regexHelpTip"
+                        text: "Поиск по шаблону. Без этой галочки текст ищется буквально.\n\n"
+                            + "Примеры для поля «Найти»:\n"
+                            + "\\d+ — любое число: 12, 345\n"
+                            + " {2,} — два и более пробела подряд (перед { — один пробел)\n"
+                            + "кот|кошка — «кот» или «кошка»\n"
+                            + "^Привет — «Привет» в начале реплики\n"
+                            + "\\. — обычная точка; \\? — вопросительный знак\n\n"
+                            + "Чтобы убрать лишние пробелы, найдите  {2,} и замените одним пробелом."
+                    }
+                }
+            }
             CheckBox { id: selectedOnly; visible: findDialog.replaceMode; text: "Только в выбранных репликах" }
             RowLayout {
                 Button { text: "Найти"; onClicked: backend.setSearch(findInput.text, caseSensitive.checked, regex.checked) }
@@ -564,7 +693,7 @@ ApplicationWindow {
             DialogTextField { id: shiftAmount; text: "0"; validator: IntValidator { } }
             ComboBox { id: shiftEdges; model: ["Начало и конец", "Только начало", "Только конец"] }
             CheckBox { id: shiftAll; text: "Все реплики документа" }
-            Label { text: "Некорректные интервалы отклоняются целиком."; font.pixelSize: 11; color: window.colors.muted }
+            Label { text: "Некорректные интервалы отклоняются целиком."; font.pixelSize: Math.round(11 * window.uiScale); color: window.colors.muted }
         }
     }
     NativeDialog {
@@ -598,7 +727,7 @@ ApplicationWindow {
         closePolicy: Popup.NoAutoClose
         property string message: ""
         background: Rectangle { color: window.colors.header; radius: 8; border.color: window.colors.border }
-        contentItem: Label { text: notification.message; color: window.colors.text; wrapMode: Text.Wrap; font.pixelSize: 12 }
+        contentItem: Label { text: notification.message; color: window.colors.text; wrapMode: Text.Wrap; font.pixelSize: Math.round(12 * window.uiScale) }
         enter: Transition { NumberAnimation { property: "opacity"; from: 0; to: 1; duration: backend.motion ? 120 : 0 } }
         exit: Transition { NumberAnimation { property: "opacity"; from: 1; to: 0; duration: backend.motion ? 120 : 0 } }
         Timer { id: notificationTimer; interval: 3800; onTriggered: notification.close() }

@@ -4,6 +4,10 @@ Workflow `Test and build alpha` автоматически запускаетс�
 `main` и для pull request. В разделе **Actions → Test and build alpha → Run
 workflow** можно запустить сборку вручную.
 
+Для локального распознавания сборщик также компилирует закреплённую
+версию whisper.cpp. Нужны CMake и C/C++ toolchain; модель пользователь
+скачивает отдельно из интерфейса готового приложения.
+
 Две задачи выполняются независимо:
 
 - Windows x64: Python 3.13, Qt, FFmpeg, ffprobe и libass; архив

@@ -47,6 +47,7 @@ class OnlineController(QObject):
         self._callback = None
         self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="substance-online")
         self.completed.connect(self._finished)
+        self.changed.connect(self.reviews.changed.emit)
         self.timer = QTimer(self, interval=30000)
         self.timer.timeout.connect(self.sync)
 
@@ -92,7 +93,13 @@ class OnlineController(QObject):
     def revision(self):
         return self.repository.revision if self.repository else 0
 
+    @Property(bool, notify=changed)
+    def reviewEnabled(self):
+        return bool(self._project_state.get("review_enabled", True))
+
     def _assigned(self, kind):
+        if kind == "editing" and not self.reviewEnabled:
+            return False
         roles = set(self._project_state.get("roles", []))
         return bool(self._project_state.get("server_admin") or roles.intersection({"admin", "chief_editor"})
                     or ({"translation": "translator", "editing": "editor"}[kind] in roles
@@ -104,7 +111,7 @@ class OnlineController(QObject):
 
     @Property(bool, notify=changed)
     def canSubmit(self):
-        return self.active and self._assigned("translation") and self._episode_state.get("translation_status") in ("in_progress", "changes_requested")
+        return self.active and self._assigned("translation") and (self._episode_state.get("translation_status") in ("in_progress", "changes_requested") or not self.reviewEnabled and self._episode_state.get("translation_status") == "ready" and self._episode_state.get("submitted_revision") != self._episode_state.get("revision"))
 
     @Property(bool, notify=changed)
     def canReview(self):
