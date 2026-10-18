@@ -42,7 +42,7 @@ NativeDialog {
     }
     ColumnLayout {
         anchors.fill: parent
-        spacing: 14
+        spacing: 12
         Label { text: "Уточните время по речи"; font.pixelSize: 24; font.weight: Font.DemiBold }
         Label {
             Layout.fillWidth: true
@@ -112,6 +112,8 @@ NativeDialog {
                     visible: advanced.checked && dialog.stage === 0
                     Layout.fillWidth: true
                     Layout.preferredHeight: Math.min(dialog.height < 780 ? 90 : 165, advancedOptions.implicitHeight)
+                    Layout.minimumHeight: 0
+                    Layout.maximumHeight: Layout.preferredHeight
                     clip: true
                     contentWidth: availableWidth
                     ColumnLayout {
@@ -134,6 +136,7 @@ NativeDialog {
                         }
                         CheckBox { id: cpuOnly; objectName: "alignmentCpu"; text: "Использовать только процессор"; enabled: !dialog.tools.busy; onClicked: dialog.tools.invalidate() }
                         Label { text: "Для перевода выберите язык оригинального аудио. Обычно достаточно поиска в пределах 1 секунды; неоднозначные совпадения нужно прослушать."; color: dialog.colors.muted; wrapMode: Text.Wrap; Layout.fillWidth: true }
+                        Label { visible: !dialog.speech.engineReady; text: "При запуске из исходников выполните scripts/build_whisper.py для сборки движка распознавания."; color: dialog.colors.warning; wrapMode: Text.Wrap; Layout.fillWidth: true }
                     }
                 }
                 RowLayout {
@@ -156,8 +159,8 @@ NativeDialog {
                 objectName: "alignmentStatus"
                 Layout.fillWidth: true
                 wrapMode: Text.Wrap
-                text: dialog.speech.downloading ? dialog.speech.status : dialog.tools.stale ? "Документ, аудио или настройки изменились. Повторите анализ." : dialog.tools.status || "После анализа здесь появятся предложенные границы реплик."
-                color: dialog.tools.error || dialog.tools.stale || dialog.speech.error ? dialog.colors.warning : dialog.colors.muted
+                text: dialog.speech.downloading ? dialog.speech.status : dialog.tools.stale ? "Документ, аудио или настройки изменились. Повторите анализ." : dialog.tools.status || (!dialog.speech.engineReady ? "Движок распознавания отсутствует. Обновите сборку приложения." : "После анализа здесь появятся предложенные границы реплик.")
+                color: dialog.tools.error || dialog.tools.stale || dialog.speech.error || !dialog.speech.engineReady ? dialog.colors.warning : dialog.colors.muted
             }
             ProgressBar { visible: dialog.tools.busy || dialog.speech.downloading; Layout.preferredWidth: 160; value: dialog.tools.busy ? dialog.tools.progress : dialog.speech.progress; indeterminate: value === 0 }
         }
@@ -172,7 +175,6 @@ NativeDialog {
             emptyTitle: "Превью границ речи"
             emptyDescription: "Запустите анализ. Здесь появятся исходное и предложенное время, текст реплики и две звуковые волны для сравнения."
         }
-        Label { visible: !dialog.speech.engineReady; text: "Движок распознавания отсутствует. Обновите сборку приложения или выполните scripts/build_whisper.py при запуске из исходников."; wrapMode: Text.Wrap; color: dialog.colors.warning; Layout.fillWidth: true }
         RowLayout {
             Layout.fillWidth: true
             Label { text: "Выбрано: " + dialog.tools.summary.selected + " · Прослушать: " + dialog.tools.summary.review + " · Изменения можно отменить"; color: dialog.colors.muted; elide: Text.ElideRight; Layout.minimumWidth: 0; Layout.fillWidth: true }

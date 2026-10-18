@@ -265,6 +265,7 @@ def test_alignment_result_review_selects_changes_and_applies_one_undo(ui):
 
 
 def test_alignment_form_sends_current_selection_language_and_boundary_options(ui, monkeypatch):
+    import sys
     from PySide6.QtCore import QMetaObject
     from substance.transcription import MODEL_BY_ID
     b, w = ui
@@ -274,6 +275,7 @@ def test_alignment_form_sends_current_selection_language_and_boundary_options(ui
     (b.speech.directory / model.filename).write_bytes(b'test-placeholder')
     b.media_controller.path = '/test/audio.wav'
     jobs = []
+    monkeypatch.setattr('substance.tools_controller.whisper_executable', lambda: sys.executable)
     monkeypatch.setattr(b.tools, '_start', jobs.append)
     b.openAlignment()
     dialog = w.findChild(QObject, 'alignmentDialog')
@@ -314,7 +316,9 @@ def test_review_preview_shows_each_split_cue_and_blocks_changed_options(ui):
 
 
 @pytest.mark.parametrize('kind', ['checks', 'balance', 'align'])
-def test_review_and_apply_fit_small_window_with_extra_settings(ui, kind):
+def test_review_and_apply_fit_small_window_with_extra_settings(ui, kind, monkeypatch):
+    # Source checkouts on CI have not compiled Whisper yet.
+    monkeypatch.setattr('substance.speech.whisper_executable', lambda: '')
     b, w = ui
     b.tools.open(kind)
     dialog = w.findChild(QObject, 'alignmentDialog' if kind == 'align' else 'editorToolsDialog')

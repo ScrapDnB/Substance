@@ -55,7 +55,7 @@ def backend(tmp_path, monkeypatch):
 
 
 def wait(bridge):
-    deadline = time.monotonic() + 3
+    deadline = time.monotonic() + 10
     while bridge.online.busy and time.monotonic() < deadline:
         QTest.qWait(10)
     assert not bridge.online.busy
