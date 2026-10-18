@@ -273,7 +273,14 @@ def test_manual_split_resize_is_saved_and_large_text_stays_accessible(ui):
     b, w, js = ui
     video = w.findChild(QObject, 'timingVideo')
     before = b.appearance.timing['videoPercent']
+    split = w.findChild(QObject, 'timingTopSplit')
+    for _ in range(150):
+        if split.width() > 0 and abs(video.width() / split.width() * 100 - before) < 1:
+            break
+        QTest.qWait(20)
+    assert split.width() > 0 and abs(video.width() / split.width() * 100 - before) < 1
     point = video.mapToScene(QPointF(video.width() + 2, video.height() / 2)).toPoint()
+    QTest.mouseMove(w, point, 30)
     QTest.mousePress(w, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, point)
     QTest.mouseMove(w, point + QPointF(50, 0).toPoint(), 30)
     QTest.mouseRelease(w, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, point + QPointF(50, 0).toPoint())

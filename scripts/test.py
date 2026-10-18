@@ -13,9 +13,10 @@ def main():
     for path in sorted((root / "tests").glob("test_*.py")):
         print(f"\nTesting {path.name}", flush=True)
         targets = [str(path)]
-        if path.name.startswith("test_online"):
+        if path.name.startswith("test_online") or path.name == "test_appearance.py":
             # Async QObject trees can outlive a backend fixture. A separate
             # process for each online scenario matches the app's Qt lifetime.
+            # Appearance scenarios also need fresh native pointer/window state.
             collection = subprocess.run(
                 [sys.executable, "-m", "pytest", "--collect-only", "--color=no", "-q", str(path)],
                 cwd=root, env=environment, timeout=60, capture_output=True,
