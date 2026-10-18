@@ -1,1 +1,12 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128"><defs><linearGradient id="b" x2="1" y2="1"><stop stop-color="#268aff"/><stop offset="1" stop-color="#075ecb"/></linearGradient></defs><rect x="4" y="4" width="120" height="120" rx="28" fill="url(#b)"/><path d="M34 44h60M34 64h44M34 84h54" fill="none" stroke="white" stroke-width="9" stroke-linecap="round"/><path d="m93 75 13 9-13 9" fill="none" stroke="white" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+  <defs>
+    <linearGradient id="b" x2="1" y2="1">
+      <stop stop-color="#268aff"/>
+      <stop offset="1" stop-color="#075ecb"/>
+    </linearGradient>
+  </defs>
+  <!-- Keep transparent margins so the tile matches neighbouring macOS Dock icons. -->
+  <rect x="12" y="12" width="104" height="104" rx="24" fill="url(#b)"/>
+  <path d="M87 44H51a10 10 0 0 0 0 20h26a10 10 0 0 1 0 20H41"
+        fill="none" stroke="white" stroke-width="8" stroke-linecap="round"/>
+</svg>

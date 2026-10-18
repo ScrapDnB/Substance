@@ -13,9 +13,10 @@ Rectangle {
     readonly property real areaHeight: height - 2 * pad
     readonly property real audioSize: config.audioVisible ? Math.min(48, config.audioHeight / 5) : 0
     readonly property real bodyHeight: areaHeight - (config.audioVisible ? audioSize + gap : 0)
-    readonly property real videoWidth: config.videoVisible ? areaWidth * config.videoPercent / 100 : 0
-    readonly property real contentWidth: areaWidth - (config.videoVisible ? videoWidth + gap : 0)
-    readonly property real contentX: !timing && config.videoVisible && config.videoSide === "left" ? pad + videoWidth + gap : pad
+    readonly property bool sideVisible: config.videoVisible || (!timing && config.contextVisible)
+    readonly property real videoWidth: sideVisible ? areaWidth * config.videoPercent / 100 : 0
+    readonly property real contentWidth: areaWidth - (sideVisible ? videoWidth + gap : 0)
+    readonly property real contentX: !timing && sideVisible && config.videoSide === "left" ? pad + videoWidth + gap : pad
     readonly property real editorRatio: timing ? 0.5 : Math.max(0.4, Math.min(0.72, config.editorHeight / 760))
     implicitHeight: 202
     color: colors.sidebar
@@ -40,12 +41,12 @@ Rectangle {
         height: preview.timing ? preview.bodyHeight * preview.config.topPercent / 100 : preview.bodyHeight * (preview.config.contextVisible ? 0.6 : 1)
     }
     Block {
-        label: "Контекст"
-        visible: !preview.timing && preview.config.videoVisible && preview.config.contextVisible
+        label: "Словарь"
+        visible: !preview.timing && preview.config.contextVisible
         x: preview.config.videoSide === "left" ? preview.pad : preview.width - preview.pad - width
-        y: preview.pad + preview.bodyHeight * 0.6 + preview.gap
+        y: preview.pad + (preview.config.videoVisible ? preview.bodyHeight * 0.6 + preview.gap : 0)
         width: preview.videoWidth
-        height: preview.bodyHeight * 0.4 - preview.gap
+        height: preview.config.videoVisible ? preview.bodyHeight * 0.4 - preview.gap : preview.bodyHeight
     }
     Block {
         label: preview.timing ? "Редактор" : ""

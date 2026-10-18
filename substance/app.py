@@ -102,6 +102,9 @@ def main():
         return 1
     window = engine.rootObjects()[0]
     app.main_window = window
+    # An accepted close completes the application lifecycle even if another
+    # native/tool window prevents Qt's automatic last-window quit.
+    window.closeAccepted.connect(app.quit, Qt.ConnectionType.QueuedConnection)
     chrome.configure(window)
     app.fileRequested.connect(backend.openPath)
     app.accept_files = True
@@ -174,6 +177,7 @@ def main():
         sidebar.detach()
     chrome.detach()
     app.main_window = None
+    backend.media_controller.shutdown()
     shiboken6.delete(window)
     shiboken6.delete(engine)
     backend.shutdown()

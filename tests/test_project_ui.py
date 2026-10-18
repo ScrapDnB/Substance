@@ -460,9 +460,14 @@ def test_auxiliary_windows_lifecycle_and_standard_buttons(bridge):
             QTest.qWait(40)
             assert not dialog.isVisible() and w.isVisible()
         original_start = b.editor.document.cues[0].start
-        js('shiftDialog.open(); shiftAmount.text = "100"; shiftDialog.reject()')
+        b.openShift()
+        w.findChild(QObject, 'shiftAmount').setProperty('value', 100)
+        js('shiftDialog.reject()')
         assert b.editor.document.cues[0].start == original_start
-        js('shiftDialog.open(); shiftDialog.accept()')
+        b.openShift()
+        w.findChild(QObject, 'shiftAmount').setProperty('value', 100)
+        assert b.timing.apply()
+        js('shiftDialog.close()')
         assert b.editor.document.cues[0].start == original_start + 100
         b.undo()
         js('settingsDialog.open()')

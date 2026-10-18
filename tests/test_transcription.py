@@ -3,7 +3,10 @@ from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace
 import hashlib
+import json
+import sys
 import threading
+import wave
 
 import pytest
 
@@ -98,6 +101,65 @@ def test_local_model_is_rechecked_before_use(tmp_path):
         asr.verify_model(target, model, threading.Event())
 
 
+@pytest.mark.parametrize('streaming', [True, False])
+def test_worker_uses_acoustic_tokens_with_lossless_stream_and_stock_json(tmp_path, monkeypatch, streaming):
+    # Exercise the actual subprocess/parser/phrase pipeline, including byte
+    # fragments, two separated voice islands and missing heuristic token ends.
+    audio = tmp_path / 'audio.wav'
+    with wave.open(str(audio), 'wb') as stream:
+        stream.setparams((1, 2, 16000, 0, 'NONE', 'not compressed'))
+        stream.writeframes(b'\0\0' * 16000 * 8)
+    model = toy_model()
+    weights = tmp_path / 'model.bin'
+    weights.write_bytes(b'model content')
+    monkeypatch.setattr(asr, 'vad_model_path', lambda: weights)
+    monkeypatch.setattr(asr, 'VAD_SIZE', model.size)
+    monkeypatch.setattr(asr, 'VAD_SHA256', model.sha256)
+    executable = tmp_path / 'whisper-cli'
+    tokens = [{'hex': '一'.encode().hex(), 'dtw': 100, 'end': -10},
+              {'hex': 'e7ad', 'dtw': 500, 'end': -10},
+              {'hex': '8b', 'dtw': 550, 'end': -10}]
+    batches = [{'start': 1000, 'end': 2000, 'tokens': tokens},
+               {'start': 4000, 'end': 5000, 'tokens': [
+                   {'hex': '次です。'.encode().hex(), 'dtw': 1200, 'end': -10}]}]
+    executable.write_text(f'''#!{sys.executable}
+import json, sys
+batches = {batches!r}
+assert '-nfa' in sys.argv and '-dtw' in sys.argv and '-sow' not in sys.argv
+print('vad_segment_info: orig_start: 1.00, orig_end: 2.00, vad_start: 0.00, vad_end: 1.00')
+print('vad_segment_info: orig_start: 4.00, orig_end: 5.00, vad_start: 1.10, vad_end: 2.10')
+if '--substance-tokens' in sys.argv:
+    for batch in batches: print('SUBSTANCE_TOKENS ' + json.dumps(batch), flush=True)
+else:
+    result = {{'transcription': [{{'offsets': {{'to': b['end']}}, 'tokens': [
+        {{'id': 1, 'text': bytes.fromhex(t['hex']).decode('utf-8', 'surrogateescape'),
+          't_dtw': t['dtw'] / 10, 'offsets': {{'to': t['end']}}}} for t in b['tokens']]}} for b in batches]}}
+    output = sys.argv[sys.argv.index('-of') + 1] + '.json'
+    with open(output, 'wb') as stream:
+        stream.write(json.dumps(result, ensure_ascii=False).encode('utf-8', 'surrogateescape'))
+''')
+    executable.chmod(0o755)
+    popen = asr.subprocess.Popen
+    def launch(command, **kwargs):
+        if command[0] == str(executable):
+            command = [sys.executable, *command]
+        return popen(command, **kwargs)
+    monkeypatch.setattr(asr.subprocess, 'Popen', launch)
+    if streaming:
+        (tmp_path / 'build.json').write_text(json.dumps({'tokens_protocol': 1}))
+    task = asr.TranscriptionJob(str(executable), model, weights, str(audio), 0, 'auto', 0, 8000, 42)
+    task.capture_words = True
+    phrases, finished = [], []
+    task.signals.segment.connect(phrases.append)
+    task.signals.finished.connect(finished.append)
+    task.run()
+    assert finished == [{'error': '', 'cancelled': False}]
+    assert [p['text'] for p in phrases] == ['一筋', '次です。']
+    assert phrases[0]['start'] == 1000 and phrases[0]['end'] == 2120
+    assert phrases[1]['start'] == 4000 and phrases[1]['end'] == 5120
+    assert task.words[1] == {'start': 1500, 'end': 2000, 'text': '筋', 'separator': ''}
+
+
 class DummyJob:
     def __init__(self, *a):
         self.signals = asr.SpeechSignals()
@@ -144,6 +206,41 @@ def append(backend, text='Recognized speech', start=1000):
 
 def finish(backend, error='', cancelled=False):
     backend.speech._task.signals.finished.emit({'error': error, 'cancelled': cancelled})
+
+
+def test_live_preview_uses_recognized_breaks_and_resets_with_document(bridge, monkeypatch):
+    assert start(bridge)
+    append(bridge, r'{\i1}First line\NSecond line')
+    preview = bridge.speech.previewRows
+    assert preview == [{'text': 'First line\nSecond line', 'start': 1000, 'end': 2000,
+                        'startText': '00:00:01.000', 'endText': '00:00:02.000'}]
+    # Reading the preview does not navigate or discard a pending manual edit.
+    bridge.stage('text', 'Manual draft')
+    assert bridge.speech.previewRows == preview
+    assert bridge.currentIndex == 0 and bridge.draft['text'] == 'Manual draft'
+    played, tracks = [], []
+    monkeypatch.setattr(bridge.media_controller, 'playRange', lambda *args: played.append(args))
+    monkeypatch.setattr(bridge.media_controller, 'setAudioTrack', tracks.append)
+    bridge.speech.playPreview(0)
+    assert tracks == [1] and played == [(1000, 2000)]
+    finish(bridge)
+    bridge._set_document(Document(), '')
+    assert bridge.speech.previewRows == []
+    assert not bridge.speech.previewPlayable
+
+
+def test_repeat_preview_is_visible_before_document_replacement(bridge):
+    assert start(bridge)
+    append(bridge, 'Old result')
+    finish(bridge)
+    assert start(bridge)
+    append(bridge, 'New result')
+    assert bridge.speech.replacing
+    assert bridge.speech.previewRows[0]['text'] == 'New result'
+    assert bridge.editor.document.cues[1].text == 'Old result'
+    finish(bridge)
+    assert not bridge.speech.replacing
+    assert bridge.editor.document.cues[1].text == 'New result'
 
 
 def test_streaming_append_preserves_manual_draft_selection_and_model(bridge):

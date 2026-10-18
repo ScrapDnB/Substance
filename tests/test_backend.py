@@ -149,7 +149,7 @@ def test_qml_typing_keyboard_navigation_and_modes(app, backend):
         wave = window.findChild(QObject, 'audioWaveform')
         assert wave is not None
         selector = window.findChild(QObject, 'audioDisplaySelector')
-        spectrum = selector.mapToScene(QPointF(selector.width() * .75, selector.height() / 2)).toPoint()
+        spectrum = selector.mapToScene(QPointF(selector.width() * .5, selector.height() / 2)).toPoint()
         QTest.mouseClick(window, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, spectrum)
         assert wave.spectral and selector.property('currentIndex') == 1
         QTest.keyClick(window, Qt.Key.Key_Left)

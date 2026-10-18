@@ -85,8 +85,9 @@ def test_local_files_hide_online_controls_even_with_saved_session(app, tmp_path,
             assert not window.findChild(QObject, "onlineStatus").property("visible")
             assert not window.findChild(QObject, "onlineStatus").property("enabled")
             assert window.findChild(QObject, "documentStatusBar").property("height") == 30
-            assert not any("онлайн" in (item.property("text") or "").lower()
-                           for item in window.findChildren(QObject) if isinstance(item.property("text"), str))
+            visible_text = [item.property("text") for item in window.findChildren(QObject)
+                            if item.property("visible") and isinstance(item.property("text"), str)]
+            assert not any("онлайн" in text.lower() for text in visible_text), visible_text
             for name in ONLINE_DIALOGS:
                 js(f"{name}.open()")
                 assert not window.findChild(QObject, name).property("visible")

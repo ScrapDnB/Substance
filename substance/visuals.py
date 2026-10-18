@@ -9,7 +9,7 @@ import math
 
 import numpy as np
 from PySide6.QtCore import QObject, Property, QPointF, QRectF, Qt, Signal, Slot
-from PySide6.QtGui import QColor, QImage, QPainter, QPainterPath, QPen, QFont, QPolygonF
+from PySide6.QtGui import QColor, QImage, QPainter, QPainterPath, QPen, QFont, QFontMetrics, QPolygonF
 from PySide6.QtQml import QmlElement
 from PySide6.QtQuick import QQuickPaintedItem
 from . import tooltips  # Register native tooltip descriptions in Substance 1.0.
@@ -216,10 +216,12 @@ class Waveform(QQuickPaintedItem):
         self._media = None
         self._start, self._end, self._view, self._span = 0, 2000, 0, 10000
         self._dark, self._spectral, self._snap = False, False, True
+        self._show_cue_range = True
         self._wave_gain, self._spectral_contrast = 1.0, 1.0
         self._drag = ""
         self._anchor = 0
         self._neighbors = []
+        self._snap_cuts, self._snap_frames, self._snap_cues = True, True, True
         self._palette_colors = {}
         self._wave_cache = None
         self._wave_cache_peaks = None
@@ -307,6 +309,14 @@ class Waveform(QQuickPaintedItem):
     spectral = scalar("spectral", bool, changed)
     snap = scalar("snap", bool, changed)
     span = scalar("span", int, changed)
+    showCueRange = scalar("show_cue_range", bool, changed)
+    snapCuts = scalar("snap_cuts", bool, changed)
+    snapFrames = scalar("snap_frames", bool, changed)
+    snapCues = scalar("snap_cues", bool, changed)
+
+    @Property(int, notify=timecodeFontChanged)
+    def bodyTop(self):
+        return max(28, QFontMetrics(self._timecode_font).height() + 10)
 
     @Property(float, notify=displayChanged)
     def waveGain(self):
@@ -363,11 +373,25 @@ class Waveform(QQuickPaintedItem):
     def _time(self, x):
         ms = max(0, round(self._view + x / max(1, self.width()) * self._span))
         if self._snap and self._media:
-            candidates = list(self._neighbors) + self._media.keyframes
+            candidates = (list(self._neighbors) if self._snap_cues else []) + (self._media.keyframes if self._snap_frames else []) + (self._media.shot_changes if self._snap_cuts else [])
             closest = min(candidates, key=lambda t: abs(t - ms), default=ms)
             if abs(closest - ms) < self._span * 8 / max(1, self.width()):
                 return closest
         return ms
+
+    @Slot(int)
+    def scrollTime(self, delta):
+        self._view = max(0, self._view + delta)
+        self.viewChanged.emit()
+        self.update()
+
+    @Slot(int, int)
+    def setViewport(self, start, span):
+        start, span = max(0, start), max(1000, min(300000, span))
+        if (self._view, self._span) != (start, span):
+            self._view, self._span = start, span
+            self.viewChanged.emit()
+            self.update()
 
     @Slot()
     def center(self):
@@ -422,7 +446,8 @@ class Waveform(QQuickPaintedItem):
                 painter.drawImage(QRectF(0, body_top, w, body_bottom - body_top), picture)
         selection = QColor(accent)
         selection.setAlpha(55)
-        painter.fillRect(QRectF(self._x(self._start), body_top, self._x(self._end) - self._x(self._start), body_bottom - body_top), selection)
+        if self._show_cue_range:
+            painter.fillRect(QRectF(self._x(self._start), body_top, self._x(self._end) - self._x(self._start), body_bottom - body_top), selection)
         painter.setPen(QPen(grid, 1))
         label_width = max(65, painter.fontMetrics().horizontalAdvance("00:00.000") + 10)
         step = next((s for s in (100, 250, 500, 1000, 2000, 5000, 10000, 30000, 60000) if s * w / self._span >= label_width), 60000)
@@ -441,12 +466,17 @@ class Waveform(QQuickPaintedItem):
                 if self._view <= ms <= self._view + self._span:
                     x = round(self._x(ms))
                     painter.drawLine(x, body_top - 5, x, body_top + 2)
+            painter.setPen(QPen(QColor(colors.get('warning', QColor('#ffb24c'))), 1, Qt.PenStyle.DashLine))
+            for ms in self._media.shot_changes:
+                if self._view <= ms <= self._view + self._span:
+                    x = round(self._x(ms))
+                    painter.drawLine(x, body_top, x, body_bottom)
         painter.setPen(QPen(muted, 1, Qt.PenStyle.DashLine))
         for ms in self._neighbors:
             x = round(self._x(ms))
             painter.drawLine(x, body_top, x, body_bottom)
         painter.setPen(QPen(accent, 3))
-        for ms in (self._start, self._end):
+        for ms in ((self._start, self._end) if self._show_cue_range else ()):
             x = round(self._x(ms))
             painter.drawLine(x, body_top, x, body_bottom)
             painter.fillRect(QRectF(x - 4, body_top, 8, 16), accent)
@@ -461,9 +491,9 @@ class Waveform(QQuickPaintedItem):
         if event.button() == Qt.MouseButton.RightButton:
             self._drag = "pan"
             self._anchor = int(x)
-        elif abs(x - self._x(self._start)) <= 10:
+        elif self._show_cue_range and abs(x - self._x(self._start)) <= 10:
             self._drag = "start"
-        elif abs(x - self._x(self._end)) <= 10:
+        elif self._show_cue_range and abs(x - self._x(self._end)) <= 10:
             self._drag = "end"
         elif event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
             self._drag = "range"

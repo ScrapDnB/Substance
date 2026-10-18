@@ -19,12 +19,14 @@ NativeDialog {
         {title: "Перевод", subtitle: "Расположение панелей", icon: "文", keywords: "перевод раскладка расположение видео аудио контекст оригинал редактор"},
         {title: "Проверки и импорт", subtitle: "Читаемость и кодировки", icon: "✓", keywords: "проверки чтение скорость строка длина импорт кодировка"},
         {title: "Документ", subtitle: "Параметры текущего файла", icon: "▤", keywords: "документ fps кадры ASS кодировка проект"},
-        {title: "Горячие клавиши", subtitle: "Команды редактора", icon: "⌘", keywords: "горячие клавиши сочетания команды"}
+        {title: "Горячие клавиши", subtitle: "Команды редактора", icon: "⌘", keywords: "горячие клавиши сочетания команды"},
+        {title: "Словарь и перевод", subtitle: "Языки, сервисы и инструкции", icon: "文", keywords: "словарь перевод языки azure deepl libretranslate ключ api инструкция подключение"}
     ]
     function reloadDocument() {
         fps.text = backend.fps.toString()
         encoding.currentIndex = Math.max(0, ["utf-8", "cp1251", "utf-16"].indexOf(backend.encoding))
     }
+    function openLanguageSettings() { navigation.page = 7; open() }
     onOpened: reloadDocument()
     Connections {
         target: backend
@@ -115,7 +117,7 @@ NativeDialog {
             spacing: 14
             Label { text: dialog.pages[navigation.page].title; font.pixelSize: 25; font.weight: Font.DemiBold; color: dialog.colors.text }
             Label {
-                text: ["Подберите палитру для комфортной работы.", "Настройте читаемость и плотность рабочего окна.", "Больше места для видео, звука и точных границ реплик.", "Расположите оригинал, перевод и контекст по своему вкусу.", "Общие значения для новых документов и параметры импорта.", "Изменения этого раздела относятся к открытому документу.", "Сочетания работают и в русской, и в английской раскладке."][navigation.page]
+                text: ["Подберите палитру для комфортной работы.", "Настройте читаемость и плотность рабочего окна.", "Больше места для видео, звука и точных границ реплик.", "Расположите оригинал, перевод и словарь по своему вкусу.", "Общие значения для новых документов и параметры импорта.", "Изменения этого раздела относятся к открытому документу.", "Сочетания работают и в русской, и в английской раскладке.", "Настройте помощь при выделении текста и подключите нужный сервис."][navigation.page]
                 color: dialog.colors.muted; wrapMode: Text.Wrap; Layout.fillWidth: true; font.pixelSize: 12
             }
             StackLayout {
@@ -529,7 +531,7 @@ NativeDialog {
                         onClicked: backend.resetShortcuts()
                     }
                 }
-
+                LanguageSettingsPane { colors: dialog.colors }
             }
         }
     }

@@ -4,8 +4,8 @@ from pathlib import Path
 
 from PySide6.QtCore import QObject, Property, QThreadPool, QTimer, Signal, Slot
 
-from .document import Cue, Document, identity
-from .timecode import parse_time
+from .document import Cue, Document, identity, plain_text
+from .timecode import parse_time, format_time
 from .transcription import LANGUAGES, MODELS, MODEL_BY_ID, ModelDownload, TranscriptionJob, whisper_executable
 from .speech_timing import TimingOptions
 from .speech_results import media_identity, mark_generated, matching_results, replacement_plan, replace_cues, intersects
@@ -37,10 +37,13 @@ class SpeechController(QObject):
         self._replaced = []
         self._known = {}
         self._prior_result = None
+        self._preview_rows = []
+        self._preview_media = None
         self._timer = QTimer(self, interval=120, singleShot=True)
         self._timer.timeout.connect(self._flush_segments)
         backend.documentReplaced.connect(self.detach)
         backend.online.changed.connect(self.changed)
+        backend.media_controller.changed.connect(self.changed)
 
     @Property('QVariantList', notify=changed)
     def models(self):
@@ -100,6 +103,30 @@ class SpeechController(QObject):
     @Property(int, notify=changed)
     def addedCount(self):
         return self._count
+
+    @Property('QVariantList', notify=changed)
+    def previewRows(self):
+        return [{'text': plain_text(row['text']), 'start': row['start'], 'end': row['end'],
+                 'startText': format_time(row['start']), 'endText': format_time(row['end'])}
+                for row in self._preview_rows]
+
+    @Property(bool, notify=changed)
+    def previewPlayable(self):
+        media = self.backend.media_controller
+        return bool(self._preview_media and self._preview_media[0] == media.path and media.hasMedia)
+
+    @Property(bool, notify=changed)
+    def replacing(self):
+        return self._repeat and self.running
+
+    @Slot(int)
+    def playPreview(self, index):
+        if self.previewPlayable and 0 <= index < len(self._preview_rows):
+            row = self._preview_rows[index]
+            media = self.backend.media_controller
+            if media.activeAudio != self._preview_media[1]:
+                media.setAudioTrack(self._preview_media[1])
+            media.playRange(row['start'], row['end'])
 
     @Property(bool, notify=changed)
     def statusVisible(self):
@@ -221,6 +248,8 @@ class SpeechController(QObject):
             self._range = (start, end)
             self._repeat = bool(matching_results(self._editor.document, self._source, start, end, known=self._known))
             self._buffered, self._replaced = [], []
+            self._preview_rows = []
+            self._preview_media = (media_path, track)
             self._session = identity('speech')
             self._originals, self._pending = {}, []
             self._count, self._progress, self._stopping = 0, 0, False
@@ -257,6 +286,7 @@ class SpeechController(QObject):
             self._pending.clear()
             return
         segments, self._pending = self._pending, []
+        self._preview_rows.extend(deepcopy(segments))
         if self._repeat:
             self._buffered.extend(segments)
             self._count += len(segments)
@@ -437,6 +467,7 @@ class SpeechController(QObject):
             self.backend.currentChanged.emit()
             self._originals.clear()
             self._replaced.clear()
+            self._preview_rows.clear()
             self._set_status(f'Удалено машинных реплик: {len(removed)}. Ручные правки сохранены: {len(retained)}.')
 
     def detach(self):
@@ -452,6 +483,8 @@ class SpeechController(QObject):
         self._buffered.clear()
         self._replaced.clear()
         self._known.clear()
+        self._preview_rows.clear()
+        self._preview_media = None
         self._prior_result = None
         self._editor = None
         self._stopping = False

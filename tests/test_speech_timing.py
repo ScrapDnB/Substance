@@ -2,7 +2,7 @@ import math
 
 import pytest
 
-from substance.speech_timing import PhraseAssembler, TimingOptions, join_words, speech_word
+from substance.speech_timing import PhraseAssembler, SpeechTimeline, SpeechTokens, TimingOptions, join_words, speech_word
 
 
 def word(start, end, text):
@@ -110,6 +110,109 @@ def test_cjk_punctuation_is_joined_without_spaces():
     assert join_words('こんにちは', '世界。') == 'こんにちは世界。'
     result = phrases([word(1000, 1200, 'こんにちは'), word(1200, 1600, '世界。'), word(2000, 2300, '次です。')])
     assert [row['text'] for row in result] == ['こんにちは世界。', '次です。']
+
+
+def test_japanese_tokens_keep_all_speech_islands_and_utf8_characters():
+    # Real CLI shape: 筋 is two BPE byte fragments, printed on separate lines.
+    tokens = SpeechTokens()
+    rows = [word(2600, 3280, 'オトメゲ'), word(3280, 4260, 'ーム'),
+            word(4300, 4960, ' 君と一'),
+            word(4960, 5060, b'\xe7\xad'.decode('utf-8', 'surrogateescape')),
+            word(5020, 5210, b'\x8b'.decode('utf-8', 'surrogateescape')),
+            word(5210, 7250, 'の光をという作品がある')]
+    words = []
+    for row in rows:
+        words.extend(tokens.feed(row))
+    words.extend(tokens.finish())
+    assert ''.join(w['text'] for w in words) == 'オトメゲーム君と一筋の光をという作品がある'
+    assert words[3] == dict(word(4960, 5210, '筋'), separator='')
+    intervals = [(2600, 3580), (4260, 6940)]
+    result = phrases([speech_word(w, intervals) for w in words])
+    assert result[-1]['end'] >= 6940
+    assert ''.join(row['text'] for row in result).replace(' ', '') == ''.join(w['text'] for w in words)
+
+
+def test_bpe_fragments_reconstruct_spaced_words_and_punctuation():
+    tokens = SpeechTokens()
+    output = []
+    for row in [word(1000, 1100, ' Hel'), word(1100, 1200, 'lo'),
+                word(1200, 1300, ','), word(1300, 1500, ' world'), word(1500, 1600, '.')]:
+        output.extend(tokens.feed(row))
+    output.extend(tokens.finish())
+    assert output == [dict(word(1000, 1200, 'Hello,'), separator=' '), dict(word(1300, 1500, 'world.'), separator=' ')]
+    assert phrases(output)[0]['text'] == 'Hello, world.'
+
+
+def test_whitespace_tokens_do_not_become_speech_and_unicode_errors_are_explicit():
+    tokens = SpeechTokens()
+    assert tokens.feed(word(1000, 1100, ' ')) == []
+    assert tokens.feed(word(1100, 1200, b'\xe7\xad'.decode('utf-8', 'surrogateescape'))) == []
+    with pytest.raises(ValueError, match='незавершённый символ'):
+        tokens.finish()
+
+
+@pytest.mark.parametrize('pieces, expected', [
+    (['안녕', '하세요.', ' 반갑', '습니다.'], '안녕하세요. 반갑습니다.'),
+    (['你好', '世界', '。'], '你好世界。'),
+    ([' ภาษา', 'ไทย', 'ทด', 'สอบ'], 'ภาษาไทยทดสอบ'),
+    ([' При', 'вет,', ' мир', '!'], 'Привет, мир!'),
+    (['世界', ' Hello', ' world', '。'], '世界 Hello world。'),
+])
+def test_token_assembly_keeps_original_spacing_across_scripts(pieces, expected):
+    tokens = SpeechTokens()
+    words = []
+    for index, piece in enumerate(pieces):
+        words.extend(tokens.feed(word(index * 100, (index + 1) * 100, piece)))
+    words.extend(tokens.finish())
+    # Use one phrase to inspect exact spaces, independent of sentence splits.
+    assembler = PhraseAssembler(42, TimingOptions(), 0, 10000)
+    assembler.words = words
+    assert assembler._text() == expected
+
+
+def test_punctuation_after_long_pause_stays_on_its_japanese_or_korean_phrase():
+    tokens = SpeechTokens()
+    words = []
+    for row in [word(1000, 1400, '있습니다'), word(2500, 2600, ' '), word(3000, 3100, '.'),
+                word(4000, 4500, ' 次です'), word(6000, 6100, '。')]:
+        words.extend(tokens.feed(row))
+    words.extend(tokens.finish())
+    assert [w['text'] for w in words] == ['있습니다.', '次です。']
+    assert [w['end'] for w in words] == [1400, 4500]
+    assert [p['text'] for p in phrases(words)] == ['있습니다.', '次です。']
+
+
+def test_acoustic_tokens_use_original_clock_and_keep_next_phrase_after_pause():
+    timeline = SpeechTimeline(offset=10000)
+    timeline.add(2600, 3580, 0, 1080)
+    timeline.add(4260, 6940, 1180, 3960)
+    rows = timeline.tokens({'tokens': [
+        {'hex': 'ゲーム'.encode().hex(), 'dtw': 800, 'end': 1070},
+        {'hex': ' 君'.encode().hex(), 'dtw': 1400, 'end': 1380},
+        {'hex': 'と'.encode().hex(), 'dtw': 1620, 'end': 1580}]})
+    assert rows[0]['end'] == 13580
+    assert rows[1]['start'] == 14260
+    assert rows[1]['end'] > rows[1]['start']
+    assert rows[2]['start'] > rows[1]['start']
+    # All token timestamps remain on their own speech islands, even when
+    # a token's heuristic end precedes its acoustic onset.
+    assert rows[2]['end'] > rows[2]['start']
+
+
+def test_missing_acoustic_timestamps_fail_instead_of_fabricating_boundaries():
+    timeline = SpeechTimeline()
+    timeline.add(1000, 2000, 0, 1000)
+    with pytest.raises(ValueError, match='акустические метки'):
+        timeline.tokens({'tokens': [{'hex': 'Hello'.encode().hex(), 'dtw': -10, 'end': 100}]})
+
+
+def test_final_acoustic_token_keeps_its_spoken_tail_when_heuristic_end_is_absent():
+    timeline = SpeechTimeline()
+    timeline.add(12740, 16990, 7770, 12120)
+    rows = timeline.tokens({'end': 18960, 'tokens': [
+        {'hex': 'だった'.encode().hex(), 'dtw': 10740, 'end': -10}]})
+    assert rows[0]['end'] == 16990
+    assert rows[0]['end'] - rows[0]['start'] > 1000
 
 
 @pytest.mark.parametrize('options', [{'reading_cps': 0}, {'lead_ms': -1}, {'pause_ms': float('nan')},

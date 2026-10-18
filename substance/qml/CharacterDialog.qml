@@ -66,6 +66,7 @@ NativeDialog {
                 }
             }
             Button { text: "Новый персонаж"; enabled: !backend.onlineSession.active; Layout.fillWidth: true; onClicked: dialog.switchCard("") }
+            Button { objectName: "autoPortraitsButton"; text: "Автопортреты…"; Layout.fillWidth: true; onClicked: { if (!dialog.modified || dialog.save()) backend.portraitTools.open() } }
             Button { text: "Удалить карточку"; enabled: !backend.onlineSession.active && dialog.editedId.length > 0 && backend.currentCard.cues.length === 0; Layout.fillWidth: true; onClicked: backend.deleteCharacter(dialog.editedId) }
         }
         ColumnLayout {

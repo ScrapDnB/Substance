@@ -12,7 +12,7 @@ import time
 import sys
 
 import numpy as np
-from PySide6.QtCore import QObject, Property, QThread, QTimer, QUrl, Signal, Slot
+from PySide6.QtCore import QObject, Property, QThread, QTimer, QUrl, Qt, Signal, Slot
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer, QVideoSink, QVideoFrame
 
 
@@ -64,10 +64,12 @@ class AudioAnalysis(QObject):
 
     def _probe(self):
         probe = ffprobe_executable()
-        if not probe:
+        if not probe or self.cancelled.is_set():
             return
         try:
             self.process = subprocess.Popen([probe, "-v", "error", "-show_streams", "-show_format", "-of", "json", self.path], stdout=subprocess.PIPE, stderr=subprocess.PIPE, **process_options())
+            if self.cancelled.is_set():
+                self.cancel()
             out, _ = self.process.communicate(timeout=15)
             if self.cancelled.is_set():
                 return
@@ -229,9 +231,11 @@ class MediaController(QObject):
         self.peaks = np.empty(0, dtype=np.float32)
         self.spectrum = np.empty((0, 64), dtype=np.uint8)
         self.keyframes: list[int] = []
+        self.shot_changes: list[int] = []
         self._progress = 0.0
         self._busy = False
         self._workers = []
+        self._closing = False
         self._stop_at = -1
         self._loop_start = -1
         self._loop = False
@@ -328,7 +332,7 @@ class MediaController(QObject):
                 sink.setVideoFrame(self._last_frame)
 
     def _media_status(self, status):
-        if status == QMediaPlayer.MediaStatus.LoadedMedia and self._priming:
+        if not self._closing and status == QMediaPlayer.MediaStatus.LoadedMedia and self._priming:
             if self._initial_seek is not None:
                 self.seek(self._initial_seek)
                 self._initial_seek = None
@@ -480,11 +484,16 @@ class MediaController(QObject):
         thread = QThread(self)
         worker.moveToThread(thread)
         thread.started.connect(worker.run)
-        worker.finished.connect(thread.quit)
-        worker.finished.connect(worker.deleteLater)
+        # quit() is thread-safe; it must also work after the GUI loop stops.
+        worker.finished.connect(thread.quit, Qt.ConnectionType.DirectConnection)
+        thread.finished.connect(worker.deleteLater)
         pair = (thread, worker)
         self._workers.append(pair)
         def cleanup():
+            # finished is emitted before deferred QObject deletion completes.
+            # QThread's destructor can wait while holding the Python GIL, which
+            # the worker's QObject teardown still needs. wait() releases the GIL.
+            thread.wait()
             if pair in self._workers:
                 self._workers.remove(pair)
             thread.deleteLater()
@@ -551,8 +560,26 @@ class MediaController(QObject):
         self._busy = False
 
     def shutdown(self):
-        self.player.stop()
+        if self._closing:
+            return
+        self._closing = True
+        self._generation += 1
+        self._capture_pending = False
+        self._capture_timer.stop()
+        self._priming = False
         self.cancel_analysis()
+        # Release native decoders while the QML video sink still exists.
+        self.player.stop()
+        self.player.setSource(QUrl())
+        self.player.setVideoSink(None)
+        if self._sink is not None:
+            try:
+                self._sink.videoFrameChanged.disconnect(self._first_frame)
+            except (RuntimeError, TypeError):
+                # The QML window may already have destroyed its video sink.
+                pass
+            self._sink = None
+        self._last_frame = QVideoFrame()
         for thread, _ in list(self._workers):
             thread.quit()
             thread.wait(7000)

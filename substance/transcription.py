@@ -9,6 +9,7 @@ from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
 import hashlib
+import json
 import os
 import re
 import shutil
@@ -24,7 +25,7 @@ import certifi
 from PySide6.QtCore import QObject, QRunnable, Signal
 
 from .media import ffmpeg_executable, process_options
-from .speech_timing import PhraseAssembler, TimingOptions, speech_word, wrap_subtitle
+from .speech_timing import PhraseAssembler, SpeechTimeline, SpeechTokens, TimingOptions, speech_word, wrap_subtitle
 
 MODEL_REVISION = '5359861c739e955e79d9a303bcbc70fb988958b1'
 VAD_FILENAME = 'ggml-silero-v6.2.0.bin'
@@ -92,6 +93,7 @@ class Cancelled(Exception):
 
 class SpeechSignals(QObject):
     segment = Signal(object)
+    result = Signal(object)
     progress = Signal(float, str)
     finished = Signal(object)
 
@@ -188,6 +190,7 @@ class ModelDownload(SpeechJob):
 SEGMENT = re.compile(r'^\[(\d+:\d{2}:\d{2}[.,]\d{3})\s+-->\s+(\d+:\d{2}:\d{2}[.,]\d{3})\]\s*(.*)$')
 PROGRESS = re.compile(r'whisper_print_progress_callback: progress =\s*(\d+)%')
 VAD_INTERVAL = re.compile(r'vad_segment_info: orig_start: ([\d.]+), orig_end: ([\d.]+)')
+VAD_MAPPING = re.compile(r'vad_segment_info: orig_start: ([\d.]+), orig_end: ([\d.]+), vad_start: ([\d.]+), vad_end: ([\d.]+)')
 
 
 def timestamp_ms(value):
@@ -214,6 +217,8 @@ class TranscriptionJob(SpeechJob):
         self.media, self.track, self.language = media, track, language
         self.start, self.end, self.width, self.cpu = start, end, width, cpu
         self.timing = timing or TimingOptions()
+        self.capture_words = False
+        self.words = []
 
     def execute(self):
         self.signals.progress.emit(0, 'Проверка модели…')
@@ -242,38 +247,77 @@ class TranscriptionJob(SpeechJob):
             if duration <= 0:
                 raise ValueError('В выбранном диапазоне нет аудио')
             end = min(self.end, self.start + duration)
+            # The bundled CLI streams lossless token bytes and acoustic DTW
+            # boundaries. A stock CLI can supply the same data in final JSON.
+            stamp = Path(self.executable).with_name('build.json')
+            try:
+                streaming = json.loads(stamp.read_text()).get('tokens_protocol') == 1
+            except (OSError, ValueError):
+                streaming = False
+            output = Path(directory) / 'transcript'
             command = [self.executable, '-m', str(self.model_path), '-f', str(audio), '-l', self.language,
-                       '-pp', '-ml', '1', '-sow', '-sns', '-t', str(min(8, os.cpu_count() or 2)),
+                       '-pp', '-sns', '-t', str(min(8, os.cpu_count() or 2)),
+                       '-dtw', self.model.id.replace('-', '.'), '-nfa',
                        '--vad', '-vm', str(vad), '-vsd', '250', '-vp', '60']
+            if streaming:
+                command.append('--substance-tokens')
+            else:
+                command.extend(['-ojf', '-of', str(output)])
             if self.cpu:
                 command.append('-ng')
             self.check_cancelled()
             self.signals.progress.emit(0, 'Распознавание…')
             self.process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                            text=True, encoding='utf-8', errors='replace', bufsize=1, **process_options())
+                                            text=True, encoding='utf-8', errors='surrogateescape', bufsize=1, **process_options())
             if self.cancelled.is_set():
                 self.cancel()
             log = deque(maxlen=12)
             intervals = []
+            timeline = SpeechTimeline(self.start)
+            tokens = SpeechTokens()
             phrases = PhraseAssembler(self.width, self.timing, self.start, end)
+
+            def emit_words(words):
+                for item in words:
+                    word = speech_word(item, intervals)
+                    if word:
+                        if self.capture_words:
+                            self.words.append(word)
+                        for phrase in phrases.feed(word):
+                            self.signals.segment.emit(phrase)
+
             try:
                 for line in self.process.stdout:
                     self.check_cancelled()
-                    segment = parse_segment(line, self.start, end, 10000)
-                    if match := VAD_INTERVAL.search(line):
-                        intervals.append((self.start + round(float(match[1]) * 1000), min(end, self.start + round(float(match[2]) * 1000))))
-                    elif segment:
-                        word = speech_word(segment, intervals)
-                        if word:
-                            for phrase in phrases.feed(word):
-                                self.signals.segment.emit(phrase)
-                        progress = (segment['end'] - self.start) / max(1, end - self.start)
+                    if match := VAD_MAPPING.search(line):
+                        bounds = [round(float(value) * 1000) for value in match.groups()]
+                        timeline.add(*bounds)
+                        intervals.append((self.start + bounds[0], min(end, self.start + bounds[1])))
+                    elif line.startswith('SUBSTANCE_TOKENS '):
+                        segment = json.loads(line.removeprefix('SUBSTANCE_TOKENS '))
+                        for token in timeline.tokens(segment):
+                            emit_words(tokens.feed(token))
+                        progress = segment['end'] / max(1, end - self.start)
                         self.signals.progress.emit(min(0.99, progress), 'Распознавание…')
                     elif match := PROGRESS.search(line):
                         self.signals.progress.emit(min(0.99, int(match[1]) / 100), 'Распознавание…')
                     elif line.strip():
                         log.append(line.strip())
                 self.process.wait()
+                self.check_cancelled()
+                if not self.process.returncode:
+                    if not streaming:
+                        result = json.loads(output.with_suffix('.json').read_text(encoding='utf-8', errors='surrogateescape'))
+                        for segment in result['transcription']:
+                            # Whisper's vocabulary reserves IDs >= 50257 for
+                            # non-text tokens. JSON stores byte fragments in
+                            # otherwise normal strings; keep them losslessly.
+                            rows = [{'hex': t['text'].encode('utf-8', errors='surrogateescape').hex(),
+                                     'dtw': round(t['t_dtw'] * 10), 'end': t.get('offsets', {}).get('to', 0)}
+                                    for t in segment['tokens'] if t['id'] < 50257]
+                            for token in timeline.tokens({'tokens': rows, 'end': segment['offsets']['to']}):
+                                emit_words(tokens.feed(token))
+                    emit_words(tokens.finish())
             finally:
                 self.process.stdout.close()
                 for phrase in phrases.finish():

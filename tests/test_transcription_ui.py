@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 import shiboken6
-from PySide6.QtCore import QObject, QUrl, QMetaObject, QEvent
+from PySide6.QtCore import QObject, QUrl, QMetaObject, QEvent, QPointF
 from PySide6.QtQml import QQmlApplicationEngine
 from PySide6.QtQuickControls2 import QQuickStyle
 from PySide6.QtTest import QTest
@@ -74,3 +74,64 @@ def test_error_status_and_dismiss_are_visible_in_main_window(ui):
     backend.speech.dismiss()
     QTest.qWait(20)
     assert not row.property('visible')
+
+
+def test_live_results_follow_new_phrases_until_user_selects_a_result(ui):
+    window, backend = ui
+    backend.openTranscription()
+    dialog = window.findChild(QObject, 'transcriptionDialog')
+    backend.speech._preview_rows = [{'start': 1000, 'end': 2000, 'text': r'One\Ntwo'},
+                                   {'start': 3000, 'end': 4000, 'text': 'Three'}]
+    backend.speech.changed.emit()
+    QTest.qWait(40)
+    assert dialog.findChild(QObject, 'speechResultList').property('count') == 2
+    assert dialog.property('previewIndex') == 1
+    dialog.findChild(QObject, 'speechFollowResults').setProperty('checked', False)
+    dialog.setProperty('previewIndex', 0)
+    backend.speech._preview_rows.append({'start': 5000, 'end': 6000, 'text': 'Four'})
+    backend.speech.changed.emit()
+    QTest.qWait(30)
+    assert dialog.property('previewIndex') == 0
+    assert dialog.property('preview')['text'] == 'One\ntwo'
+    assert not dialog.findChild(QObject, 'speechPlayPreview').property('enabled')
+    assert dialog.property('visible')
+    dialog.close()
+
+
+def test_settings_preview_and_start_fit_small_window(ui):
+    window, backend = ui
+    backend.openTranscription()
+    dialog = window.findChild(QObject, 'transcriptionDialog')
+    dialog.resize(800, 680)
+    dialog.findChild(QObject, 'speechAdvancedToggle').setProperty('checked', True)
+    QTest.qWait(40)
+    for name in ('speechResultList', 'speechSubtitlePreview', 'speechStartButton'):
+        item = dialog.findChild(QObject, name)
+        point = item.mapToScene(QPointF())
+        assert point.x() >= 0 and point.y() >= 0, name
+        assert point.x() + item.width() <= dialog.width(), name
+        assert point.y() + item.height() <= dialog.height(), name
+    dialog.close()
+
+
+@pytest.mark.parametrize('size', [(800, 680), (1280, 900)])
+def test_long_recognition_results_keep_cards_clear_of_scrollbar(ui, size):
+    window, backend = ui
+    backend.openTranscription()
+    dialog = window.findChild(QObject, 'transcriptionDialog')
+    dialog.resize(*size)
+    backend.speech._preview_rows = [{'start': i * 3000, 'end': i * 3000 + 2500,
+                                    'text': 'Длинная распознанная фраза для проверки ширины карточки. ' * 3}
+                                   for i in range(194)]
+    backend.speech.changed.emit()
+    QTest.qWait(60)
+    results = dialog.findChild(QObject, 'speechResultList')
+    scrollbar = results.findChild(QObject, 'speechResultsScrollBar')
+    assert results.property('count') == 194
+    assert scrollbar.property('size') < 1
+    card = results.property('currentItem')
+    point = card.mapToItem(results, QPointF(card.width(), card.height()))
+    assert point.x() <= scrollbar.x() - 6
+    assert 0 < point.y() <= results.height() + 1
+    assert results.property('contentX') == 0
+    dialog.close()

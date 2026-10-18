@@ -78,7 +78,10 @@ class ProjectImageProvider(QQuickImageProvider):
 
     def requestImage(self, image_id, size, requested_size):
         key = image_id.split('?')[0]
-        image = self.backend._capture_image if key == 'capture' else decode_image(self.backend.editor.document.images[key]) if key in self.backend.editor.document.images else QImage()
+        if key.startswith('auto-portrait-'):
+            image = self.backend.portraits.preview_image(key)
+        else:
+            image = self.backend._capture_image if key == 'capture' else decode_image(self.backend.editor.document.images[key]) if key in self.backend.editor.document.images else QImage()
         if requested_size.isValid() and not image.isNull():
             image = image.scaled(requested_size, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
         size.setWidth(image.width())

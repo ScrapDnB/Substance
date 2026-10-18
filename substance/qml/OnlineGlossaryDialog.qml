@@ -71,6 +71,7 @@ NativeDialog {
                 Button { text: "+ Термин"; enabled: dialog.session.canEdit && !dialog.session.pending && !dialog.form.data; onClicked: { if (dialog.session.begin("", "term")) dialog.loadDraft() } }
             }
             Button { text: "Обновить"; enabled: !backend.onlineSession.busy; onClicked: dialog.session.refresh() }
+            Button { objectName: "onlineAutoPortraitsButton"; text: "Автозаполнить портреты…"; onClicked: backend.portraitTools.open() }
         }
         ColumnLayout {
             Layout.fillWidth: true; Layout.fillHeight: true

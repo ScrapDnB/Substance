@@ -5,6 +5,7 @@ import Substance 1.0
 
 ApplicationWindow {
     id: window
+    signal closeAccepted()
     objectName: "substanceWindow"
     width: 1440
     height: 940
@@ -13,8 +14,8 @@ ApplicationWindow {
     property var macOSIntegration: null
     property bool startupChromeReady: true
     readonly property bool nativeToolbar: macOSIntegration !== null && macOSIntegration.nativeToolbarActive
-    readonly property bool modalOpen: transcriptionDialog.visible || settingsDialog.visible || spellingDialog.visible || findDialog.visible
-                                     || assTagsDialog.visible || shiftDialog.visible || leadDialog.visible || actorDialog.visible
+    readonly property bool modalOpen: libreServerWizard.visible || hardsubDialog.visible || transcriptionDialog.visible || settingsDialog.visible || spellingDialog.visible || findDialog.visible
+                                     || assTagsDialog.visible || leadDialog.visible || actorDialog.visible
                                      || onlineConflictDialog.visible || onlineGlossaryDialog.visible || onlineWorkflowDialog.visible || reviewsDialog.visible || reviewCompose.visible || characterDialog.visible || portraitCropDialog.visible
     visible: startupChromeReady
     title: (backend.dirty ? "● " : "") + backend.title + " — Substance"
@@ -37,6 +38,11 @@ ApplicationWindow {
         text: nativeColors.text || systemPalette.text,
         muted: nativeColors.muted || Qt.alpha(systemPalette.windowText, 0.6),
         surface: nativeColors.surface || systemPalette.base,
+        workspace: window.dark ? Qt.darker(nativeColors.surface || systemPalette.base, 1.18) : Qt.darker(nativeColors.surface || systemPalette.base, 1.06),
+        panel: window.dark ? Qt.lighter(nativeColors.surface || systemPalette.base, 1.16) : Qt.darker(nativeColors.surface || systemPalette.base, 1.015),
+        panelHeader: window.dark ? Qt.lighter(nativeColors.surface || systemPalette.base, 1.3) : Qt.darker(nativeColors.surface || systemPalette.base, 1.045),
+        separator: Qt.alpha(nativeColors.text || systemPalette.text, window.dark ? 0.18 : 0.15),
+        label: Qt.alpha(nativeColors.text || systemPalette.text, 0.78),
         alternate: nativeColors.alternate || systemPalette.alternateBase,
         sidebar: nativeColors.sidebar || systemPalette.window,
         header: nativeColors.header || systemPalette.button,
@@ -63,6 +69,11 @@ ApplicationWindow {
     color: colors.surface
 
     function closeAuxiliaryWindows() {
+        libreServerWizard.close()
+        autoPortraitsDialog.close()
+        hardsubDialog.close()
+        editorToolsDialog.close()
+        alignmentDialog.close()
         transcriptionDialog.close()
         assTagsDialog.close()
         notification.close()
@@ -82,7 +93,10 @@ ApplicationWindow {
     }
     onClosing: close => {
         close.accepted = backend.requestClose()
-        if (close.accepted) closeAuxiliaryWindows()
+        if (close.accepted) {
+            closeAuxiliaryWindows()
+            closeAccepted()
+        }
     }
     Connections {
         target: backend.onlineSession
@@ -119,7 +133,8 @@ ApplicationWindow {
     Action { id: setEndAction; text: "Конец по текущему кадру"; shortcut: backend.shortcuts.setEnd; enabled: backend.current.exists && backend.media.hasMedia; onTriggered: backend.setEdge("end") }
     Action { id: frameBackAction; text: "Предыдущий кадр"; shortcut: backend.shortcuts.frameBack; enabled: backend.media.hasMedia; onTriggered: backend.stepFrame(-1) }
     Action { id: frameForwardAction; text: "Следующий кадр"; shortcut: backend.shortcuts.frameForward; enabled: backend.media.hasMedia; onTriggered: backend.stepFrame(1) }
-    Action { id: shiftAction; text: "Сдвиг времени…"; shortcut: backend.shortcuts.shift; enabled: backend.count > 0; onTriggered: shiftDialog.open() }
+    Action { id: shiftAction; text: "Сдвиг времени…"; shortcut: backend.shortcuts.shift; enabled: backend.count > 0 && !backend.busy; onTriggered: backend.openShift() }
+    Action { id: pointSyncAction; text: "Точечная синхронизация…"; enabled: backend.count > 0 && !backend.busy; onTriggered: backend.openPointSync() }
     Action { id: assignCharacterAction; text: "Назначить персонажа…"; shortcut: backend.shortcuts.assignCharacter; enabled: backend.current.exists && !backend.busy && !window.modalOpen; onTriggered: { if (backend.flush()) actorDialog.open() } }
     Action { id: quitAction; text: "Выйти из Substance"; shortcut: StandardKey.Quit; onTriggered: window.close() }
     Shortcut { sequence: "Space"; enabled: backend.media.hasMedia && !window.textInputFocused(); onActivated: backend.media.toggle() }
@@ -153,25 +168,19 @@ ApplicationWindow {
             MenuSeparator { }
             MenuItem { text: "Открыть видео или аудио…"; onTriggered: backend.openMedia() }
             MenuItem { text: "Импорт субтитров из видео…"; onTriggered: backend.importEmbedded() }
-            MenuItem { objectName: "transcriptionMenuItem"; text: "Создать субтитры из аудио…"; enabled: !backend.busy; onTriggered: transcriptionDialog.open() }
             MenuSeparator { }
             MenuItem { action: Action { text: "Закрыть окно"; shortcut: StandardKey.Close; enabled: !window.modalOpen; onTriggered: window.close() } }
             MenuItem { action: quitAction; visible: !backend.isMac }
         }
         Menu {
+            id: editMenu
+            objectName: "editMenu"
             title: "Правка"
             MenuItem { action: undoAction }
             MenuItem { action: redoAction }
             MenuSeparator { }
             MenuItem { action: findAction }
             MenuItem { action: replaceAction }
-            MenuItem {
-                objectName: "useAssStylesMenuItem"
-                text: "Учитывать стили ASS"
-                checkable: true
-                checked: backend.useAssStyles
-                onTriggered: backend.setUseAssStyles(checked)
-            }
             MenuItem {
                 objectName: "preserveAssFormattingMenuItem"
                 text: "Сохранять оформление"
@@ -180,9 +189,6 @@ ApplicationWindow {
                 onTriggered: backend.setPreserveAssFormatting(checked)
             }
             MenuItem { text: "Удалить ASS-теги…"; enabled: backend.count > 0 && !backend.busy; onTriggered: { if (backend.flush()) assTagsDialog.open() } }
-            MenuItem { text: "Заметки и предложения…"; enabled: !backend.onlineSession.active; onTriggered: backend.openReviews() }
-            MenuItem { text: "Персонажи проекта…"; onTriggered: backend.openCharacters("") }
-            MenuItem { text: "Проверить орфографию…"; onTriggered: spellingDialog.open() }
             MenuSeparator { }
             MenuItem { action: copyAction }
             MenuItem { action: pasteAction }
@@ -195,6 +201,13 @@ ApplicationWindow {
             MenuItem { text: "Боковая панель"; checkable: true; checked: window.sidebarVisible; onTriggered: window.sidebarVisible = !window.sidebarVisible }
             MenuItem { text: "Режим тайминга"; checkable: true; checked: backend.mode === "timing"; onTriggered: backend.setMode("timing") }
             MenuItem { text: "Режим перевода"; checkable: true; checked: backend.mode === "translation"; onTriggered: backend.setMode("translation") }
+            MenuItem {
+                objectName: "useAssStylesMenuItem"
+                text: "Учитывать стили ASS"
+                checkable: true
+                checked: backend.useAssStyles
+                onTriggered: backend.setUseAssStyles(checked)
+            }
             MenuSeparator { }
             MenuItem { text: "Системная тема"; onTriggered: backend.preference("theme", "system") }
             MenuItem { text: "Светлая тема"; onTriggered: backend.preference("theme", "light") }
@@ -225,9 +238,27 @@ ApplicationWindow {
             MenuItem { action: setStartAction }
             MenuItem { action: setEndAction }
             MenuItem { action: shiftAction }
+            MenuItem { objectName: "pointSyncMenuItem"; action: pointSyncAction }
             MenuItem { text: "Округлить выбранные к кадрам"; onTriggered: backend.batch("frames", "", false) }
             MenuItem { text: "Добавить отступы…"; onTriggered: leadDialog.open() }
             MenuItem { text: "Убрать пересечения выбранных"; onTriggered: backend.batch("remove_overlap", "", false) }
+        }
+        Menu {
+            id: toolsMenu
+            objectName: "toolsMenu"
+            title: "Инструменты"
+            MenuItem { objectName: "checksMenuItem"; text: "Проверить и исправить…"; enabled: backend.count > 0 && !backend.busy; onTriggered: backend.openChecks() }
+            MenuItem { text: "Проверить орфографию…"; enabled: backend.count > 0; onTriggered: spellingDialog.open() }
+            MenuItem { text: "Переносы и разбиение…"; enabled: backend.count > 0 && !backend.busy; onTriggered: backend.openReflow() }
+            MenuSeparator { }
+            MenuItem { objectName: "transcriptionMenuItem"; text: "Создать субтитры из аудио…"; enabled: !backend.busy; onTriggered: transcriptionDialog.open() }
+            MenuItem { objectName: "hardsubMenuItem"; text: "Найти и распознать хардсаб…"; onTriggered: backend.openHardsub() }
+            MenuItem { text: "Уточнить по речи…"; enabled: backend.count > 0 && !backend.busy; onTriggered: backend.openAlignment() }
+            MenuItem { text: "Найти смены планов…"; onTriggered: backend.openScenes() }
+            MenuSeparator { }
+            MenuItem { text: "Персонажи проекта…"; onTriggered: backend.openCharacters("") }
+            MenuItem { text: "Автопортреты из видео…"; onTriggered: backend.openAutoPortraits() }
+            MenuItem { text: "Заметки и предложения…"; enabled: !backend.onlineSession.active; onTriggered: backend.openReviews() }
         }
         Menu {
             title: "Справка"
@@ -247,12 +278,12 @@ ApplicationWindow {
             anchors.rightMargin: 14
             spacing: 10
             ControlButton { symbol: "sidebar"; onClicked: window.sidebarVisible = !window.sidebarVisible; hint: "Показать или скрыть боковую панель" }
-            Label { text: backend.title; font.bold: true; font.pixelSize: Math.round(14 * window.uiScale); color: window.colors.text; elide: Text.ElideRight; Layout.maximumWidth: 280 }
-            Label { text: backend.onlineSession.active ? (backend.dirty ? "Изменено" : backend.onlineSession.pending ? "На компьютере" : "На сервере") : backend.dirty ? "Изменено" : "✓ Сохранено"; color: backend.dirty ? window.colors.muted : window.colors.success; font.pixelSize: Math.round(11 * window.uiScale) }
+            Label { visible: window.width > 1200 * window.uiScale; text: backend.title; font.bold: true; font.pixelSize: Math.round(14 * window.uiScale); color: window.colors.text; elide: Text.ElideRight; Layout.maximumWidth: 240 }
+            Label { visible: window.width > 1100 * window.uiScale; text: backend.onlineSession.active ? (backend.dirty ? "Изменено" : backend.onlineSession.pending ? "На компьютере" : "На сервере") : backend.dirty ? "Изменено" : "✓ Сохранено"; color: backend.dirty ? window.colors.muted : window.colors.success; font.pixelSize: Math.round(11 * window.uiScale) }
             Item { Layout.fillWidth: true }
             SegmentedSelector {
                 id: modeTabs
-                Layout.preferredWidth: 220
+                Layout.preferredWidth: window.width < 1100 * window.uiScale ? 200 : 220
                 labels: ["Тайминг", "Перевод"]
                 selectedIndex: backend.mode === "translation" ? 1 : 0
                 onActivated: index => backend.setMode(index ? "translation" : "timing")
@@ -267,7 +298,14 @@ ApplicationWindow {
                     spacing: 5
                     ControlButton { objectName: "toolbarMedia"; symbol: "video"; hint: "Открыть видео или аудио…"; onClicked: backend.openMedia() }
                     ControlButton { objectName: "toolbarTranscribe"; symbol: "transcribe"; hint: "Распознать речь…"; onClicked: transcriptionDialog.open() }
-                    ControlButton { text: "Экспорт…"; onClicked: backend.exportDialog(false) }
+                    ControlButton { objectName: "toolbarPortraits"; symbol: "portraits"; hint: "Автопортреты из видео…"; enabled: !backend.busy; onClicked: backend.openAutoPortraits() }
+                    ControlButton { objectName: "toolbarChecks"; symbol: "checks"; hint: "Проверить и исправить…"; enabled: backend.count > 0; onClicked: backend.openChecks() }
+                    ControlButton { objectName: "toolbarReflow"; symbol: "reflow"; hint: "Переносы и разбиение…"; enabled: backend.count > 0; onClicked: backend.openReflow() }
+                    ControlButton { objectName: "toolbarAlignment"; symbol: "align"; hint: "Уточнить тайминг по речи…"; enabled: backend.count > 0; onClicked: backend.openAlignment() }
+                    ControlButton { objectName: "toolbarPointSync"; symbol: "point-sync"; hint: "Точечная синхронизация…"; enabled: backend.count > 0 && !backend.busy; onClicked: backend.openPointSync() }
+                    ControlButton { objectName: "toolbarShift"; symbol: "time-shift"; hint: "Сдвиг времени с предпросмотром…"; enabled: backend.count > 0 && !backend.busy; onClicked: backend.openShift() }
+                    ControlButton { objectName: "toolbarScenes"; symbol: "scenes"; hint: "Найти смены планов…"; onClicked: backend.openScenes() }
+                    ControlButton { objectName: "toolbarExport"; text: window.width < 1100 * window.uiScale ? "" : "Экспорт…"; symbol: text.length ? "" : "export"; hint: "Экспорт…"; onClicked: backend.exportDialog(false) }
                     ControlButton { objectName: "toolbarSettings"; symbol: "settings"; onClicked: settingsDialog.open(); hint: "Настройки" }
                 }
             }
@@ -353,6 +391,7 @@ ApplicationWindow {
                 Label { text: "Создайте ASS с нуля или откройте готовые субтитры. Видео и аудио можно подключить в любой момент."; wrapMode: Text.Wrap; horizontalAlignment: Text.AlignHCenter; color: window.colors.muted; Layout.fillWidth: true }
                 RowLayout { Layout.alignment: Qt.AlignHCenter; Button { objectName: "createFirstLine"; text: "Создать субтитры"; highlighted: true; onClicked: backend.addLine() } Button { text: "Открыть файл…"; onClicked: backend.openDialog() } }
                 Button { objectName: "transcribeEmptyDocument"; text: "Распознать речь из видео или аудио…"; Layout.alignment: Qt.AlignHCenter; onClicked: transcriptionDialog.open() }
+                Button { objectName: "hardsubEmptyDocument"; text: "Распознать хардсаб из видео…"; Layout.alignment: Qt.AlignHCenter; onClicked: backend.openHardsub() }
                 Button { text: "Открыть пример"; flat: true; Layout.alignment: Qt.AlignHCenter; onClicked: backend.openExample() }
                 Label { text: "ASS · SRT · VTT · TXT · .substance\nИли перетащите файл в окно"; color: window.colors.muted; horizontalAlignment: Text.AlignHCenter; font.pixelSize: Math.round(11 * window.uiScale); Layout.alignment: Qt.AlignHCenter }
             }
@@ -363,7 +402,7 @@ ApplicationWindow {
                 enabled: !backend.busy
                 anchors.fill: parent
                 orientation: Qt.Vertical
-                handle: Rectangle { implicitHeight: 5; color: window.colors.header; Rectangle { width: 40; height: 2; radius: 1; color: window.colors.border; anchors.centerIn: parent } }
+                handle: WorkspaceSplitHandle { colors: window.colors }
                 Loader {
                     id: workspace
                     SplitView.fillHeight: true
@@ -396,7 +435,7 @@ ApplicationWindow {
             readonly property var config: backend.appearance.timing
             property bool ready: false
             orientation: Qt.Vertical
-            handle: Rectangle { implicitHeight: 5; color: window.colors.header; Rectangle { width: 40; height: 2; color: window.colors.border; anchors.centerIn: parent } }
+            handle: WorkspaceSplitHandle { colors: window.colors }
             function applyLayout() {
                 if (!ready || resizing || topSplit.resizing) return
                 if (itemAt(1) !== (config.audioPosition === "middle" ? timingAudio : timingTable)) moveItem(2, 1)
@@ -415,7 +454,7 @@ ApplicationWindow {
                 objectName: "timingTopSplit"
                 SplitView.minimumHeight: Math.round(320 * window.uiScale)
                 orientation: Qt.Horizontal
-                handle: Rectangle { implicitWidth: 5; color: window.colors.header }
+                handle: WorkspaceSplitHandle { colors: window.colors; horizontal: true }
                 onResizingChanged: if (!resizing && timingSplit.ready && timingSplit.config.videoVisible) backend.appearance.resizeLayout("timing", {videoPercent: timingVideo.width / Math.max(1, width) * 100})
                 VideoPane { id: timingVideo; objectName: "timingVideo"; visible: timingSplit.config.videoVisible; colors: window.colors; SplitView.minimumWidth: 230 }
                 CueEditor { id: timingEditor; objectName: "timingEditor"; colors: window.colors; SplitView.fillWidth: true; SplitView.minimumWidth: 390; onEditorCursorChanged: position => window.editCursor = position; onComposeRequested: kind => reviewCompose.create(kind) }
@@ -432,57 +471,43 @@ ApplicationWindow {
             readonly property var config: backend.appearance.translation
             property bool ready: false
             orientation: Qt.Horizontal
-            handle: Rectangle { implicitWidth: 5; color: window.colors.header }
+            handle: WorkspaceSplitHandle { colors: window.colors; horizontal: true }
             function applyLayout() {
-                if (!ready || resizing || textSplit.resizing) return
+                if (!ready || resizing || textSplit.resizing || contextColumn.resizing) return
                 if (itemAt(0) !== (config.videoSide === "left" ? contextColumn : textSplit)) moveItem(1, 0)
                 if (textSplit.itemAt(0) !== (config.tableFirst ? translationTable : translationEditor)) textSplit.moveItem(1, 0)
                 contextColumn.SplitView.preferredWidth = width * config.videoPercent / 100
                 translationEditor.SplitView.preferredHeight = config.editorHeight
+                languagePane.SplitView.preferredHeight = config.contextHeight
             }
             Component.onCompleted: { ready = true; Qt.callLater(applyLayout) }
             onWidthChanged: Qt.callLater(applyLayout)
             Connections { target: backend.appearance; function onChanged() { translationSplit.applyLayout() } }
-            onResizingChanged: if (!resizing && ready && config.videoVisible) backend.appearance.resizeLayout("translation", {videoPercent: contextColumn.width / Math.max(1, width) * 100})
+            onResizingChanged: if (!resizing && ready && (config.videoVisible || config.contextVisible)) backend.appearance.resizeLayout("translation", {videoPercent: contextColumn.width / Math.max(1, width) * 100})
             SplitView {
                 id: textSplit
                 SplitView.fillWidth: true
                 SplitView.minimumWidth: 460
                 orientation: Qt.Vertical
-                handle: Rectangle { implicitHeight: 5; color: window.colors.header }
+                handle: WorkspaceSplitHandle { colors: window.colors }
                 onResizingChanged: if (!resizing && translationSplit.ready) backend.appearance.resizeLayout("translation", {editorHeight: translationEditor.height})
                 SubtitleTable { id: translationTable; colors: window.colors; SplitView.fillHeight: true; SplitView.minimumHeight: 100 }
                 CueEditor { id: translationEditor; objectName: "translationEditor"; colors: window.colors; SplitView.minimumHeight: 315; onEditorCursorChanged: position => window.editCursor = position; onComposeRequested: kind => reviewCompose.create(kind) }
             }
-            ColumnLayout {
+            SplitView {
                 id: contextColumn
-                visible: translationSplit.config.videoVisible
+                visible: translationSplit.config.videoVisible || translationSplit.config.contextVisible
                 SplitView.minimumWidth: 230
-                spacing: 0
-                VideoPane { objectName: "translationVideo"; colors: window.colors; Layout.fillWidth: true; Layout.fillHeight: true; Layout.minimumHeight: 150 }
-                Pane {
+                orientation: Qt.Vertical
+                handle: WorkspaceSplitHandle { colors: window.colors }
+                onResizingChanged: if (!resizing && translationSplit.ready && translationSplit.config.videoVisible && translationSplit.config.contextVisible) backend.appearance.resizeLayout("translation", {contextHeight: languagePane.height})
+                VideoPane { objectName: "translationVideo"; visible: translationSplit.config.videoVisible; colors: window.colors; SplitView.fillHeight: true; SplitView.minimumHeight: 150 }
+                LanguagePane {
+                    id: languagePane
                     visible: backend.appearance.translation.contextVisible
-                    Layout.fillWidth: true
-                    padding: 16
-                    background: Rectangle { color: window.colors.surface }
-                    ColumnLayout {
-                        width: parent.width
-                        spacing: 12
-                        Label { text: "Контекст"; color: window.colors.text; font.bold: true }
-                        Repeater {
-                            model: backend.contextLines
-                            delegate: ColumnLayout {
-                                required property var modelData
-                                Layout.fillWidth: true
-                                spacing: 3
-                                Label { text: modelData.number + " · " + (modelData.character || "Без персонажа"); font.pixelSize: Math.round(10 * window.uiScale); color: window.colors.muted }
-                                Label { text: modelData.text; color: modelData.active ? window.colors.accent : window.colors.text; wrapMode: Text.Wrap; font.pixelSize: Math.round(12 * window.uiScale); Layout.fillWidth: true; maximumLineCount: 3; elide: Text.ElideRight; textFormat: Text.PlainText }
-                            }
-                        }
-                        Rectangle { Layout.fillWidth: true; height: 1; color: window.colors.border }
-                        Label { text: "Проверка реплики"; font.bold: true; color: window.colors.text }
-                        Label { text: backend.current.issues.length ? "⚠ " + backend.current.issues.join("\n⚠ ") : "✓ Читаемость в норме"; color: backend.current.issues.length ? window.colors.warning : window.colors.success; wrapMode: Text.Wrap; Layout.fillWidth: true; font.pixelSize: Math.round(12 * window.uiScale) }
-                    }
+                    colors: window.colors
+                    SplitView.minimumHeight: 140
+                    SplitView.fillHeight: !translationSplit.config.videoVisible
                 }
             }
         }
@@ -563,6 +588,11 @@ ApplicationWindow {
     ReviewCompose { id: reviewCompose; objectName: "reviewComposeDialog"; transientParent: reviewsDialog.visible ? reviewsDialog : window; colors: window.colors }
     ReviewsDialog { id: reviewsDialog; objectName: "reviewsDialog"; colors: window.colors; onComposeRequested: kind => reviewCompose.create(kind); onEditRequested: entry => reviewCompose.edit(entry) }
     CharacterDialog { id: characterDialog; objectName: "characterDialog"; colors: window.colors }
+    AutoPortraitsDialog { id: autoPortraitsDialog; objectName: "autoPortraitsDialog"; colors: window.colors }
+    Connections {
+        target: backend.portraitTools
+        function onRequested() { autoPortraitsDialog.open() }
+    }
     PortraitCropDialog { id: portraitCropDialog; objectName: "portraitCropDialog"; transientParent: characterDialog.visible ? characterDialog : window; colors: window.colors; onGlossaryRequested: onlineGlossaryDialog.open() }
     Connections {
         target: backend
@@ -577,11 +607,24 @@ ApplicationWindow {
             } else { characterDialog.open(); characterDialog.reload() }
         }
         function onCropRequested() { portraitCropDialog.open() }
-        function onDocumentReplaced() { onlineConflictDialog.close(); onlineGlossaryDialog.close(); characterDialog.modified = false; characterDialog.close(); portraitCropDialog.close(); reviewsDialog.close(); reviewCompose.close(); onlineWorkflowDialog.close(); actorDialog.close() }
+        function onDocumentReplaced() { shiftDialog.close(); alignmentDialog.close(); onlineConflictDialog.close(); onlineGlossaryDialog.close(); characterDialog.modified = false; characterDialog.close(); portraitCropDialog.close(); reviewsDialog.close(); reviewCompose.close(); onlineWorkflowDialog.close(); actorDialog.close() }
     }
 
+    EditorToolsDialog { id: editorToolsDialog; colors: window.colors }
+    AlignmentDialog { id: alignmentDialog; colors: window.colors }
+    Connections {
+        target: backend.editorTools
+        function onRequested(kind) {
+            if (kind === "align") { editorToolsDialog.close(); alignmentDialog.open() }
+            else { alignmentDialog.close(); editorToolsDialog.prepare(kind) }
+        }
+    }
+    HardsubDialog { id: hardsubDialog; colors: window.colors }
+    Connections { target: backend.hardsubTools; function onRequested() { hardsubDialog.open() } }
     TranscriptionDialog { id: transcriptionDialog; colors: window.colors }
     SettingsDialog { id: settingsDialog; objectName: "settingsDialog"; colors: window.colors }
+    LibreServerWizard { id: libreServerWizard; colors: window.colors }
+    Connections { target: backend.languageAssistance; function onSettingsRequested() { settingsDialog.openLanguageSettings() } }
 
     NativeDialog {
         colors: window.colors
@@ -678,24 +721,8 @@ ApplicationWindow {
             }
         }
     }
-    NativeDialog {
-        colors: window.colors
-        id: shiftDialog
-        objectName: "shiftDialog"
-        title: "Сдвиг времени"
-        preferredWidth: 480
-        modal: true
-        standardButtons: Dialog.Ok | Dialog.Cancel
-        onAccepted: backend.shift(Number(shiftAmount.text), ["both", "start", "end"][shiftEdges.currentIndex], shiftAll.checked)
-        ColumnLayout {
-            anchors.fill: parent
-            Label { text: "Сдвиг в миллисекундах · отрицательный — раньше"; wrapMode: Text.Wrap; Layout.fillWidth: true }
-            DialogTextField { id: shiftAmount; text: "0"; validator: IntValidator { } }
-            ComboBox { id: shiftEdges; model: ["Начало и конец", "Только начало", "Только конец"] }
-            CheckBox { id: shiftAll; text: "Все реплики документа" }
-            Label { text: "Некорректные интервалы отклоняются целиком."; font.pixelSize: Math.round(11 * window.uiScale); color: window.colors.muted }
-        }
-    }
+    TimingDialog { id: shiftDialog; colors: window.colors }
+    Connections { target: backend.timingTools; function onRequested() { shiftDialog.prepare(); shiftDialog.open() } }
     NativeDialog {
         colors: window.colors
         id: leadDialog

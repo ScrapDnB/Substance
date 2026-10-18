@@ -1,7 +1,8 @@
-name: Test and build alpha
+name: Test, build and release
 on:
   push:
     branches: [main]
+    tags: ['v*']
   pull_request:
   workflow_dispatch:
 permissions:
@@ -78,7 +79,7 @@ jobs:
         run: python -c "import shutil; shutil.make_archive('dist/Substance-Windows-x64', 'zip', root_dir='dist', base_dir='Substance')"
       - uses: actions/upload-artifact@v4
         with:
-          name: Substance-0.1.0-alpha.5-${{ runner.os }}
+          name: Substance-${{ runner.os }}
           path: |
             dist/Substance-*.zip
           retention-days: 14
@@ -93,3 +94,28 @@ jobs:
             build/qa/macos-minimum.json
           if-no-files-found: ignore
           retention-days: 14
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: Substance-*
+          path: dist
+          merge-multiple: true
+      - name: Publish beta release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cd dist
+          sha256sum Substance-*.zip > SHA256SUMS.txt
+          cd ..
+          title="Substance $(python3 -c 'from substance import __version__; print(__version__)')"
+          gh release create "$GITHUB_REF_NAME" dist/Substance-*.zip dist/SHA256SUMS.txt \
+            --verify-tag --title "$title" --notes-file RELEASE_NOTES.md --prerelease

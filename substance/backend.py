@@ -228,6 +228,68 @@ class Backend(QObject):
         self.online = OnlineController(self)
         from .speech import SpeechController
         self.speech = SpeechController(self)
+        from .tools_controller import ToolsController
+        self.tools = ToolsController(self)
+        from .timing_controller import TimingController
+        self.timing = TimingController(self)
+        from .portraits_controller import PortraitsController
+        self.portraits = PortraitsController(self)
+        from .hardsub_controller import HardsubController
+        self.hardsub = HardsubController(self)
+        from .language_controller import LanguageController
+        self.language_assistance = LanguageController(self)
+
+    @Property(QObject, constant=True)
+    def languageAssistance(self):
+        return self.language_assistance
+
+    @Property(QObject, constant=True)
+    def hardsubTools(self):
+        return self.hardsub
+
+    @Slot()
+    def openHardsub(self):
+        self.hardsub.open()
+
+    @Property(QObject, constant=True)
+    def portraitTools(self):
+        return self.portraits
+
+    @Slot()
+    def openAutoPortraits(self):
+        self.portraits.open()
+
+    @Property(QObject, constant=True)
+    def editorTools(self):
+        return self.tools
+
+    @Property(QObject, constant=True)
+    def timingTools(self):
+        return self.timing
+
+    @Slot()
+    def openShift(self):
+        self.timing.open('shift')
+
+    @Slot()
+    def openPointSync(self):
+        self.timing.open('points')
+
+    @Slot()
+    def openChecks(self):
+        self.tools.open('checks')
+
+    @Slot()
+    def openReflow(self):
+        self.tools.open('balance')
+
+    @Slot()
+    def openAlignment(self):
+        self.tools.open('align')
+
+    @Slot()
+    def openScenes(self):
+        self.tools.open('scenes')
 
     @Property(QObject, constant=True)
     def transcription(self):
@@ -1741,6 +1803,10 @@ class Backend(QObject):
                 self.media_controller.seek(portrait['time'])
 
     def shutdown(self):
+        self.language_assistance.shutdown()
+        self.hardsub.shutdown()
+        self.portraits.shutdown()
+        self.tools.shutdown()
         self.speech.shutdown()
         if self._ass_notice is not None:
             self._ass_notice.close()

@@ -28,7 +28,7 @@ ScrollView {
                 SettingsChoice { visible: !pane.timing; title: "Таблица реплик"; group: "translation"; setting: "tableFirst"; labels: ["Над редактором", "Под редактором"]; values: [true, false]; Layout.fillWidth: true }
                 SettingsChoice { visible: !pane.timing; title: "Оригинал и перевод"; group: "translation"; setting: "originalBelow"; labels: ["Рядом", "Друг под другом"]; values: [false, true]; Layout.fillWidth: true }
                 SettingsNumber { visible: !pane.timing; title: "Высота редактора"; group: "translation"; setting: "editorHeight"; from: 315; to: 650; Layout.fillWidth: true }
-                CheckBox { visible: !pane.timing; text: "Показывать контекст и проверку реплики"; enabled: pane.config.videoVisible; checked: backend.appearance.translation.contextVisible; onClicked: backend.appearance.setValue("translation", "contextVisible", checked) }
+                CheckBox { visible: !pane.timing; text: "Показывать словарь и перевод"; checked: backend.appearance.translation.contextVisible; onClicked: backend.appearance.setValue("translation", "contextVisible", checked) }
             }
         }
         DialogSection {

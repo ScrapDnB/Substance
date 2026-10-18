@@ -2,6 +2,7 @@
 from pathlib import Path
 import json
 import os
+import runpy
 import subprocess
 import sys
 import tempfile
@@ -33,6 +34,9 @@ def main():
                 timeout=60, check=True,
             )
         report = json.loads(diagnostics.read_text(encoding="utf-8"))
+        expected_version = runpy.run_path(str(root / "substance/__init__.py"))["__version__"]
+        if report.get("version") != expected_version:
+            raise RuntimeError(f"Unexpected packaged version: {report.get('version')}; expected {expected_version}")
         expected_style = "macOS" if sys.platform == "darwin" else "FluentWinUI3"
         if report["style"] != expected_style or report["platform"] != sys.platform:
             raise RuntimeError(f"Unexpected packaged platform or style: {report}")

@@ -4,6 +4,128 @@ import math
 import re
 
 
+# Scripts whose words cannot be recovered by waiting for ASCII spaces.
+UNSPACED = re.compile(r'[\u0e00-\u109f\u1780-\u17ff\u3000-\u9fff\uac00-\ud7af\U00020000-\U0003134f]')
+CLOSING_PUNCTUATION = re.compile(r'^[,.!?;:…。，、！？；：؟،۔।॥)\]}>»”’」』】》]+$')
+
+
+class SpeechTimeline:
+    """Map acoustic token boundaries out of VAD's compressed audio clock."""
+    def __init__(self, offset=0):
+        self.offset = offset
+        self.intervals = []
+        self.previous_island = None
+
+    def add(self, original_start, original_end, processed_start, processed_end):
+        self.intervals.append((original_start, original_end, processed_start, processed_end))
+
+    def tokens(self, segment):
+        tokens = segment['tokens']
+        if any(t['dtw'] < 0 and bytes.fromhex(t['hex']).strip() for t in tokens):
+            raise ValueError('Движок не вернул акустические метки речи. Обновите сборку Whisper.')
+        output = []
+        for index, token in enumerate(tokens):
+            raw = bytes.fromhex(token['hex'])
+            if not raw:
+                continue
+            when = max(0, token['dtw'])
+            if not self.intervals:
+                continue
+            island = min(range(len(self.intervals)), key=lambda i: max(
+                self.intervals[i][2] - when, when - self.intervals[i][3], 0))
+            a, b, c, d = self.intervals[island]
+            if b <= a or d <= c:
+                continue
+            def original(value):
+                return a + round((min(d, max(c, value)) - c) * (b - a) / (d - c))
+            start = original(when)
+            # DTW's first text token can start inside the opening phoneme.
+            # Use VAD's onset when that token is close to the island's start.
+            text = raw.decode('utf-8', errors='surrogateescape')
+            if raw.strip() and not CLOSING_PUNCTUATION.fullmatch(text.strip()) and island != self.previous_island:
+                if start - a <= 250:
+                    start = a
+                self.previous_island = island
+            if index + 1 < len(tokens):
+                stop = original(max(when + 10, tokens[index + 1]['dtw']))
+            elif token['end'] > when:
+                stop = original(token['end'])
+            else:
+                # DTW gives token onsets; it does not always populate the
+                # heuristic end field. The last token lasts to the ASR
+                # segment end, bounded by its own original speech island.
+                stop = min(b, segment.get('end', b))
+            start = min(start, b - 1)
+            output.append({'start': self.offset + start, 'end': self.offset + max(start + 1, stop),
+                           'text': text})
+        return output
+
+
+class SpeechTokens:
+    """Reassemble timestamped BPE bytes into Unicode words or CJK tokens.
+
+    Whisper's split-on-word mode only recognizes ASCII spaces. In Japanese
+    that can make a whole sentence one segment, which must never be clipped
+    to the first VAD island as if it were a single word. Token mode also splits
+    some UTF-8 characters across output lines, so decode only complete bytes.
+    """
+    def __init__(self):
+        self.pending_bytes = b''
+        self.pending_start = None
+        self.pending_end = 0
+        self.word = None
+        self.unspaced = False
+        self.boundary = False
+
+    def _finish_word(self):
+        if self.word is None:
+            return []
+        result, self.word = self.word, None
+        self.unspaced = False
+        return [result]
+
+    def feed(self, token):
+        if self.pending_start is None:
+            self.pending_start = token['start']
+        self.pending_end = max(self.pending_end, token['end'])
+        self.pending_bytes += token['text'].encode('utf-8', errors='surrogateescape')
+        try:
+            text = self.pending_bytes.decode('utf-8')
+        except UnicodeDecodeError as exc:
+            if exc.reason == 'unexpected end of data':
+                return []
+            raise ValueError('Движок вернул повреждённый текст речи') from exc
+        start, end = self.pending_start, self.pending_end
+        self.pending_bytes, self.pending_start, self.pending_end = b'', None, 0
+        output = []
+        if not text.strip():
+            self.boundary = True
+            return output
+        if self.word is not None and CLOSING_PUNCTUATION.fullmatch(text.strip()):
+            # Punctuation has no spoken duration and can receive a DTW point
+            # in the following pause. Keep it on the preceding text unit.
+            self.word['text'] += text.strip()
+            return output
+        unspaced = bool(UNSPACED.search(text))
+        separator = ' ' if text[0].isspace() or self.boundary else ''
+        self.boundary = False
+        if separator or unspaced or self.unspaced:
+            output.extend(self._finish_word())
+        if self.word is None:
+            self.word = {'start': start, 'end': end, 'text': text.strip(),
+                         'separator': separator}
+            self.unspaced = unspaced
+        else:
+            self.word['text'] += text
+            self.word['end'] = max(self.word['end'], end)
+        return output
+
+    def finish(self):
+        if self.pending_bytes:
+            raise ValueError('Движок вернул незавершённый символ в тексте речи')
+        return self._finish_word()
+
+
 def wrap_subtitle(text, width):
     """Wrap at whitespace where possible, and at characters for CJK speech."""
     text = ' '.join(text.split())
@@ -74,12 +196,14 @@ def speech_word(word, intervals):
     return result if result['end'] > result['start'] else None
 
 
-def join_words(left, right):
+def join_words(left, right, separator=None):
     right = right.strip()
     if not left:
         return right
     if not right:
         return left
+    if separator is not None:
+        return left + separator + right
     if re.match(r'^[,.;:!?，。！？、：；)\]»]', right) or left[-1] in '([«':
         return left + right
     if re.search(r'[\u3000-\u9fff\uac00-\ud7af]$', left) or re.match(r'^[\u3000-\u9fff\uac00-\ud7af]', right):
@@ -102,7 +226,7 @@ class PhraseAssembler:
     def _text(self):
         text = ''
         for word in self.words:
-            text = join_words(text, word['text'])
+            text = join_words(text, word['text'], word.get('separator'))
         return text
 
     def feed(self, word):
@@ -111,7 +235,7 @@ class PhraseAssembler:
             return output
         if self.words:
             text = self._text()
-            prospective = join_words(text, word['text'])
+            prospective = join_words(text, word['text'], word.get('separator'))
             overflow = len(wrap_subtitle(prospective, self.width).split(r'\N')) > 2
             # When the final word crosses the line limit, balance the complete
             # sentence instead of leaving a one-word subtitle at its end.
@@ -123,9 +247,9 @@ class PhraseAssembler:
                 for index in range(1, len(combined)):
                     left, right = '', ''
                     for item in combined[:index]:
-                        left = join_words(left, item['text'])
+                        left = join_words(left, item['text'], item.get('separator'))
                     for item in combined[index:]:
-                        right = join_words(right, item['text'])
+                        right = join_words(right, item['text'], item.get('separator'))
                     if all(len(wrap_subtitle(part, self.width).split(r'\N')) <= 2 for part in (left, right)):
                         score = abs(len(left) - len(right))
                         if re.search(r'[,;:，；：]$', left):

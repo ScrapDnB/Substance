@@ -9,6 +9,8 @@ import sys
 import tarfile
 import urllib.request
 
+from whisper_tokens import PROTOCOL, patch_whisper
+
 VERSION = '1.8.3'
 SOURCE_SHA256 = '870ba21409cdf66697dc4db15ebdb13bc67037d76c7cc63756c81471d8f1731a'
 ROOT = Path(__file__).resolve().parents[1]
@@ -39,7 +41,10 @@ def prepare_whisper(root=ROOT):
     prepare_vad(output)
     executable = output / ('whisper-cli.exe' if os.name == 'nt' else 'whisper-cli')
     stamp = output / 'build.json'
-    if executable.is_file() and stamp.is_file() and json.loads(stamp.read_text()).get('source_sha256') == SOURCE_SHA256:
+    patch_sha256 = hashlib.sha256(Path(__file__).with_name('whisper_tokens.py').read_bytes()).hexdigest()
+    if (executable.is_file() and stamp.is_file()
+            and json.loads(stamp.read_text()).get('source_sha256') == SOURCE_SHA256
+            and json.loads(stamp.read_text()).get('token_patch_sha256') == patch_sha256):
         record = json.loads(stamp.read_text())
         record.update(vad_revision=VAD_REVISION, vad_sha256=VAD_SHA256)
         stamp.write_text(json.dumps(record, indent=2) + '\n')
@@ -55,6 +60,13 @@ def prepare_whisper(root=ROOT):
     if not source.is_dir():
         with tarfile.open(archive) as bundle:
             bundle.extractall(work, filter='data')
+    # Reapply from the verified upstream bytes, including when a previously
+    # patched generated source tree is reused after this patch changes.
+    with tarfile.open(archive) as bundle:
+        for relative in ('examples/cli/cli.cpp', 'src/whisper.cpp'):
+            with bundle.extractfile(f'whisper.cpp-{VERSION}/{relative}') as stream:
+                (source / relative).write_bytes(stream.read())
+    patch_whisper(source)
     build = work / 'cmake'
     configure = ['cmake', '-S', str(source), '-B', str(build), '-DCMAKE_BUILD_TYPE=Release',
                  '-DBUILD_SHARED_LIBS=OFF', '-DWHISPER_BUILD_TESTS=OFF', '-DWHISPER_BUILD_SERVER=OFF',
@@ -71,6 +83,7 @@ def prepare_whisper(root=ROOT):
     shutil.copy2(next(path for path in candidates if path.is_file()), executable)
     shutil.copy2(source / 'LICENSE', output / 'LICENSE')
     stamp.write_text(json.dumps({'version': VERSION, 'source_sha256': SOURCE_SHA256,
+                                'tokens_protocol': PROTOCOL, 'token_patch_sha256': patch_sha256,
                                 'vad_revision': VAD_REVISION, 'vad_sha256': VAD_SHA256}, indent=2) + '\n')
     return executable
 

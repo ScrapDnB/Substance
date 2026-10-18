@@ -31,22 +31,20 @@ Item {
         font.bold: backend.appearance.timecodeBold
         font.pixelSize: table.appearance.timecodeSize
     }
+    Rectangle { anchors.fill: parent; color: table.colors.surface }
 
     ColumnLayout {
         anchors.fill: parent
         spacing: 0
-        Pane {
+        WorkspaceHeader {
+            objectName: "tablePanelHeader"
+            colors: table.colors
+            title: "Реплики"
+            detail: backend.visibleCount === backend.count ? backend.count + " всего" : backend.visibleCount + " из " + backend.count
             Layout.fillWidth: true
-            padding: 8
-            background: Rectangle { color: table.colors.surface }
-            RowLayout {
-                anchors.fill: parent
-                Label { text: backend.visibleCount + " реплик"; color: table.colors.muted; font.pixelSize: 12 }
-                Item { Layout.fillWidth: true }
-                TextField { id: searchField; objectName: "tableSearch"; Layout.preferredWidth: Math.min(300, table.width * 0.35); placeholderText: "Найти в репликах"; text: backend.search; onTextEdited: searchDelay.restart(); Accessible.name: "Поиск по репликам" }
-                Timer { id: searchDelay; interval: 180; onTriggered: backend.setSearch(searchField.text, false, false) }
-                ControlButton { symbol: "plus"; onClicked: backend.addLine(); hint: "Добавить реплику · " + backend.shortcutLabel("newLine") }
-            }
+            TextField { id: searchField; objectName: "tableSearch"; Layout.preferredWidth: Math.min(300, table.width * 0.35); placeholderText: "Найти в репликах"; text: backend.search; onTextEdited: searchDelay.restart(); Accessible.name: "Поиск по репликам" }
+            Timer { id: searchDelay; interval: 180; onTriggered: backend.setSearch(searchField.text, false, false) }
+            ControlButton { symbol: "plus"; onClicked: backend.addLine(); hint: "Добавить реплику · " + backend.shortcutLabel("newLine") }
         }
         Flickable {
             id: tableViewport
@@ -67,18 +65,18 @@ Item {
                 Rectangle {
                     Layout.fillWidth: true
                     Layout.preferredHeight: Math.round(29 * table.uiScale)
-                    color: table.colors.header
+                    color: table.colors.panelHeader
                     Row {
                         anchors.fill: parent
                         anchors.leftMargin: 8
-                        Label { width: table.numberWidth; height: parent.height; verticalAlignment: Text.AlignVCenter; text: "№"; font.pixelSize: Math.round(11 * table.uiScale); color: table.colors.muted }
-                        Label { width: table.timeWidth; height: parent.height; verticalAlignment: Text.AlignVCenter; text: table.translationMode ? "Начало" : "Начало"; font.pixelSize: Math.round(11 * table.uiScale); color: table.colors.muted }
-                        Label { visible: !table.translationMode; width: table.timeWidth; height: parent.height; verticalAlignment: Text.AlignVCenter; text: "Конец"; font.pixelSize: Math.round(11 * table.uiScale); color: table.colors.muted }
-                        Label { width: table.portraitWidth; height: parent.height; verticalAlignment: Text.AlignVCenter; text: "Фото"; font.pixelSize: Math.round(11 * table.uiScale); color: table.colors.muted }
-                        Label { width: table.actorWidth; height: parent.height; verticalAlignment: Text.AlignVCenter; text: "Персонаж"; font.pixelSize: Math.round(11 * table.uiScale); color: table.colors.muted }
-                        Label { width: table.translationMode ? table.textWidth / 2 : table.textWidth; height: parent.height; verticalAlignment: Text.AlignVCenter; text: table.translationMode ? "Оригинал" : "Текст"; font.pixelSize: Math.round(11 * table.uiScale); color: table.colors.muted }
-                        Label { visible: table.translationMode; width: table.textWidth / 2; height: parent.height; verticalAlignment: Text.AlignVCenter; text: "Перевод"; font.pixelSize: Math.round(11 * table.uiScale); color: table.colors.muted }
-                        Label { width: table.statusWidth; height: parent.height; verticalAlignment: Text.AlignVCenter; text: "Замечания"; font.pixelSize: Math.round(11 * table.uiScale); color: table.colors.muted }
+                        Label { width: table.numberWidth; height: parent.height; verticalAlignment: Text.AlignVCenter; text: "№"; font.pixelSize: Math.round(12 * table.uiScale); font.weight: Font.Medium; color: table.colors.label }
+                        Label { width: table.timeWidth; height: parent.height; verticalAlignment: Text.AlignVCenter; text: table.translationMode ? "Начало" : "Начало"; font.pixelSize: Math.round(12 * table.uiScale); font.weight: Font.Medium; color: table.colors.label }
+                        Label { visible: !table.translationMode; width: table.timeWidth; height: parent.height; verticalAlignment: Text.AlignVCenter; text: "Конец"; font.pixelSize: Math.round(12 * table.uiScale); font.weight: Font.Medium; color: table.colors.label }
+                        Label { width: table.portraitWidth; height: parent.height; verticalAlignment: Text.AlignVCenter; text: "Фото"; font.pixelSize: Math.round(12 * table.uiScale); font.weight: Font.Medium; color: table.colors.label }
+                        Label { width: table.actorWidth; height: parent.height; verticalAlignment: Text.AlignVCenter; text: "Персонаж"; font.pixelSize: Math.round(12 * table.uiScale); font.weight: Font.Medium; color: table.colors.label }
+                        Label { width: table.translationMode ? table.textWidth / 2 : table.textWidth; height: parent.height; verticalAlignment: Text.AlignVCenter; text: table.translationMode ? "Оригинал" : "Текст"; font.pixelSize: Math.round(12 * table.uiScale); font.weight: Font.Medium; color: table.colors.label }
+                        Label { visible: table.translationMode; width: table.textWidth / 2; height: parent.height; verticalAlignment: Text.AlignVCenter; text: "Перевод"; font.pixelSize: Math.round(12 * table.uiScale); font.weight: Font.Medium; color: table.colors.label }
+                        Label { width: table.statusWidth; height: parent.height; verticalAlignment: Text.AlignVCenter; text: "Замечания"; font.pixelSize: Math.round(12 * table.uiScale); font.weight: Font.Medium; color: table.colors.label }
                     }
                 }
                 ListView {

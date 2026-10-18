@@ -47,7 +47,7 @@ DEFAULTS = {
     "translation": {
         "videoSide": "right", "videoVisible": True, "videoPercent": 35,
         "audioVisible": True, "audioHeight": 192, "tableFirst": True,
-        "editorHeight": 395, "contextVisible": True, "originalBelow": False,
+        "editorHeight": 395, "contextVisible": True, "contextHeight": 300, "originalBelow": False,
     },
 }
 BOUNDS = {
@@ -57,6 +57,7 @@ BOUNDS = {
     "audioHeight": (145, 350), "editorHeight": (315, 650),
     "waveGain": (25, 800), "spectralContrast": (25, 300),
     "timecodeSize": (10, 28),
+    "contextHeight": (140, 650),
 }
 OPTIONS = {
     "videoSide": ("left", "right"), "audioPosition": ("middle", "bottom"),

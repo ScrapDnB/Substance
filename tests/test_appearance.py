@@ -18,6 +18,54 @@ from substance import visuals  # noqa: F401
 ROOT = Path(__file__).resolve().parents[1]
 
 
+@pytest.mark.parametrize('mode', ['timing', 'translation'])
+@pytest.mark.parametrize('theme', ['light', 'dark'])
+def test_editor_details_keep_draft_and_actions_accessible_without_video(ui, mode, theme):
+    b, window, _ = ui
+    b.setMode(mode)
+    b.preference('theme', theme)
+    # Checks must be available even with the media/context column hidden.
+    b.appearance.setValue(mode, 'videoVisible', False)
+    b.editor.update(0, text='Длинная строка для проверки читаемости. ' * 4)
+    b._refresh()
+    b._save_path(str(b.data_dir / 'details.substance'))
+    b.addReview('note', 'Сохранить обращение на «вы».', '')
+    QTest.qWait(40)
+    editor = window.findChild(QObject, 'subtitleEditor')
+    editor.setProperty('text', 'Незавершённая правка')
+    editor.setProperty('cursorPosition', 7)
+    b._stage_timer.stop()
+    document = b.editor.document.to_dict()
+    panel = window.findChild(QObject, 'timingEditor' if mode == 'timing' else 'translationEditor')
+
+    for name in ('cueChecksToggle', 'cueReviewsToggle'):
+        button = panel.findChild(QObject, name)
+        assert button.isVisible() and not button.property('checked')
+        point = button.mapToScene(QPointF(button.width() / 2, button.height() / 2)).toPoint()
+        QTest.mouseClick(window, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, point)
+        QTest.qWait(20)
+        assert button.property('checked')
+    assert panel.findChild(QObject, 'cueChecksDetails').isVisible()
+    assert window.findChild(QObject, 'subtitleEditor') is editor
+    assert editor.property('text') == 'Незавершённая правка'
+    assert editor.property('cursorPosition') == 7
+    assert b.draft['translation' if mode == 'translation' else 'text'] == 'Незавершённая правка'
+    assert b.editor.document.to_dict() == document
+
+    b.appearance.setValue('general', 'uiScale', 125)
+    b.appearance.setValue('general', 'sidebarWidth', 340)
+    window.resize(980, 650)
+    QTest.qWait(40)
+    # Expanding long auxiliary content must not scroll primary actions away.
+    for name in ('cueChecksToggle', 'cueReviewsToggle', 'applyCueButton'):
+        item = panel.findChild(QObject, name)
+        point = item.mapToItem(panel, QPointF())
+        assert point.x() >= 0 and point.y() >= 0
+        assert point.x() + item.width() <= panel.width() + 1
+        assert point.y() + item.height() <= panel.height() + 1
+    assert not window.grabWindow().isNull()
+
+
 def test_settings_validation_migration_persistence_and_resets(tmp_path):
     settings = QSettings(str(tmp_path / 'settings.ini'), QSettings.Format.IniFormat)
     settings.setValue('theme', 'dark')

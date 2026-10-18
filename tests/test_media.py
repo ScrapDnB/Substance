@@ -184,3 +184,21 @@ def test_silent_video_has_empty_audio_without_error(app, tmp_path):
     assert not errors
     assert results[0][0].size == 0
     assert results[0][1].shape == (0, 64)
+
+
+def test_shutdown_unloads_media_and_stops_analysis_without_gui_events(app, media):
+    controller = MediaController()
+    controller.player.setAudioOutput(None)
+    sink = QVideoSink(controller)
+    controller.setVideoSink(sink)
+    controller.open(str(media))
+    workers = list(controller._workers)
+    controller.shutdown()
+    assert controller.player.source().isEmpty()
+    assert controller.player.videoSink() is None
+    assert controller._sink is None
+    assert not controller._capture_timer.isActive()
+    assert all(not thread.isRunning() for thread, worker in workers)
+    assert all(worker.cancelled.is_set() for thread, worker in workers)
+    controller.shutdown()
+    app.processEvents()

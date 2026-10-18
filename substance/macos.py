@@ -75,6 +75,8 @@ if sys.platform == 'darwin':
                 item.setAction_('toolbarAction:')
                 # Public AppKit API: system grouping, material and accessibility.
                 item.setBordered_(True)
+                if key in ('substance.checks', 'substance.reflow', 'substance.align', 'substance.scenes', 'substance.portraits'):
+                    item.setVisibilityPriority_(800)
                 # AppKit places navigation controls before the document title.
                 item.setNavigational_(key == self.owner.SIDEBAR)
             self.items[key] = item
@@ -109,6 +111,14 @@ class MacOSIntegration(QObject):
         'substance.redo': ('Повторить', 'arrow.uturn.forward', 'redo'),
         'substance.media': ('Открыть видео или аудио…', 'film', 'openMedia'),
         'substance.transcribe': ('Распознать речь…', 'captions.bubble', 'openTranscription'),
+        'substance.hardsub': ('Найти и распознать хардсаб…', 'text.viewfinder', 'openHardsub'),
+        'substance.portraits': ('Автопортреты из видео…', 'person.crop.square', 'openAutoPortraits'),
+        'substance.checks': ('Проверить и исправить…', 'checklist', 'openChecks'),
+        'substance.reflow': ('Переносы и разбиение…', 'text.alignleft', 'openReflow'),
+        'substance.align': ('Уточнить тайминг по речи…', 'waveform.badge.magnifyingglass', 'openAlignment'),
+        'substance.point-sync': ('Точечная синхронизация…', 'point.topleft.down.to.point.bottomright.curvepath', 'openPointSync'),
+        'substance.time-shift': ('Сдвиг времени…', 'arrow.left.and.right', 'openShift'),
+        'substance.scenes': ('Найти смены планов…', 'film.stack', 'openScenes'),
         'substance.settings': ('Настройки…', 'gearshape', None),
         'substance.export': ('Экспорт…', 'square.and.arrow.up', 'exportDialog'),
     }
@@ -183,7 +193,9 @@ class MacOSIntegration(QObject):
         return [self.SIDEBAR, flexible, self.MODE, flexible,
                 'substance.new', 'substance.open', 'substance.save', space,
                 'substance.undo', 'substance.redo', space,
-                'substance.media', 'substance.transcribe', space, 'substance.export', 'substance.settings']
+                'substance.media', 'substance.transcribe', 'substance.portraits', space,
+                'substance.checks', 'substance.reflow', 'substance.align', 'substance.point-sync', 'substance.time-shift', 'substance.scenes',
+                space, 'substance.export', 'substance.settings']
 
     def configure(self, window):
         if sys.platform != 'darwin' or QGuiApplication.platformName() != 'cocoa' or self._active:
@@ -197,7 +209,7 @@ class MacOSIntegration(QObject):
             self._content_pointer = int(objc.pyobjc_id(ns_window.contentView()))
             self._parent_pointer = int(objc.pyobjc_id(view.superview()))
             # A new layout identifier avoids restoring the previous default order.
-            toolbar = NSToolbar.alloc().initWithIdentifier_('dev.scrapdnb.substance.toolbar.v5')
+            toolbar = NSToolbar.alloc().initWithIdentifier_('dev.scrapdnb.substance.toolbar.v8')
             delegate = _SubstanceToolbarDelegate.alloc().initWithOwner_(self)
             toolbar.setDelegate_(delegate)
             toolbar.setDisplayMode_(NSToolbarDisplayModeIconOnly)
@@ -224,7 +236,9 @@ class MacOSIntegration(QObject):
             log.exception('Could not attach the native toolbar; using the Qt toolbar')
 
     def enabled(self, key):
-        if key == 'substance.transcribe':
+        if key in ('substance.checks', 'substance.reflow', 'substance.align', 'substance.point-sync', 'substance.time-shift'):
+            return self.backend.count > 0 and not self.backend.busy
+        if key in ('substance.transcribe', 'substance.portraits'):
             return not self.backend.busy
         if key in ('substance.new', 'substance.open') or key == self.MODE:
             return not self.backend.busy
