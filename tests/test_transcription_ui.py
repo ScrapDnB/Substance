@@ -98,7 +98,8 @@ def test_live_results_follow_new_phrases_until_user_selects_a_result(ui):
     dialog.close()
 
 
-def test_settings_preview_and_start_fit_small_window(ui):
+def test_settings_preview_and_start_fit_small_window(ui, monkeypatch):
+    monkeypatch.setattr('substance.speech.whisper_executable', lambda: '')
     window, backend = ui
     backend.openTranscription()
     dialog = window.findChild(QObject, 'transcriptionDialog')

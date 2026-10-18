@@ -29,7 +29,7 @@ def test_repair_preserves_overrides_original_and_roundtrip(tmp_path):
     save_document(editor.document, path)
     assert load_document(path).cues[0].text == editor.document.cues[0].text
     export_document(editor.document, tmp_path / 'out.ass')
-    assert parse_ass((tmp_path / 'out.ass').read_text()).cues[0].text == editor.document.cues[0].text
+    assert parse_ass((tmp_path / 'out.ass').read_text(encoding='utf-8-sig')).cues[0].text == editor.document.cues[0].text
     editor.undo()
     assert editor.document == snapshot
     editor.redo()

@@ -63,7 +63,7 @@ NativeDialog {
     }
     ColumnLayout {
         anchors.fill: parent
-        spacing: 14
+        spacing: 12
         Label { text: "Субтитры из речи"; font.pixelSize: 24; font.weight: Font.DemiBold }
         Label { text: "Выберите аудио и язык. Распознанные реплики будут появляться здесь — их можно сразу прослушать и проверить."; color: dialog.colors.muted; wrapMode: Text.Wrap; Layout.fillWidth: true }
         ToolCard {
@@ -119,6 +119,8 @@ NativeDialog {
                     visible: advanced.checked
                     Layout.fillWidth: true
                     Layout.preferredHeight: Math.min(Math.max(60, Math.min(195, dialog.height - 620)), advancedOptions.implicitHeight)
+                    Layout.minimumHeight: 0
+                    Layout.maximumHeight: Layout.preferredHeight
                     contentWidth: availableWidth
                     clip: true
                     ColumnLayout {
@@ -157,13 +159,14 @@ NativeDialog {
                             Button { objectName: "speechRemoveModel"; text: "Удалить модель с компьютера"; visible: !!dialog.selectedModel.exists; onClicked: dialog.speech.removeModel(dialog.selectedModel.id) }
                         }
                         Label { text: "До двух строк в реплике. Продление для чтения ограничено следующей фразой. После скачивания модели аудио обрабатывается без интернета."; color: dialog.colors.muted; wrapMode: Text.Wrap; Layout.fillWidth: true }
+                        Label { visible: !dialog.speech.engineReady; text: "При запуске из исходников выполните python scripts/build_whisper.py для сборки движка распознавания."; color: dialog.colors.warning; wrapMode: Text.Wrap; Layout.fillWidth: true }
                     }
                 }
             }
         }
         RowLayout {
             Layout.fillWidth: true
-            Label { objectName: "speechStatus"; text: dialog.speech.status; color: dialog.speech.error ? dialog.colors.warning : dialog.colors.muted; wrapMode: Text.Wrap; maximumLineCount: 2; elide: Text.ElideRight; Layout.fillWidth: true }
+            Label { objectName: "speechStatus"; text: dialog.speech.status || (!dialog.speech.engineReady ? "Движок распознавания отсутствует. Обновите сборку приложения." : ""); color: dialog.speech.error || !dialog.speech.engineReady ? dialog.colors.warning : dialog.colors.muted; wrapMode: Text.Wrap; maximumLineCount: 2; elide: Text.ElideRight; Layout.fillWidth: true }
             ProgressBar { Layout.preferredWidth: 160; visible: dialog.speech.busy; value: dialog.speech.progress; indeterminate: value === 0 }
         }
         RowLayout {
@@ -271,7 +274,6 @@ NativeDialog {
             }
         }
         Label { visible: !dialog.speech.canAppend && destination.currentIndex === 0; text: "Оригинал этой онлайн-серии неизменяем. Выберите новый локальный документ."; wrapMode: Text.Wrap; color: dialog.colors.warning; Layout.fillWidth: true }
-        Label { visible: !dialog.speech.engineReady; text: "Движок не найден. При запуске из исходников выполните: python scripts/build_whisper.py"; wrapMode: Text.Wrap; Layout.fillWidth: true; color: dialog.colors.warning }
         RowLayout {
             Layout.fillWidth: true
             Label { text: "Аудио обрабатывается на компьютере"; color: dialog.colors.muted; Layout.fillWidth: true; Layout.minimumWidth: 0; elide: Text.ElideRight }

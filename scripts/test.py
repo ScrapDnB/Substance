@@ -33,7 +33,9 @@ def main():
                     [sys.executable, "-m", "pytest", "-q", target],
                     cwd=root, env=environment, timeout=180,
                 )
-                if result.returncode:
+                # Module-level importorskip (for example POSIX-only server
+                # tests on Windows) yields pytest's NO_TESTS_COLLECTED status.
+                if result.returncode not in (0, 5):
                     failed.append(target)
             except subprocess.TimeoutExpired:
                 failed.append(target + " (timeout)")

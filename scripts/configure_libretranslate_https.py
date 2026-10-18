@@ -45,16 +45,17 @@ def health(domain):
 
 
 def write_config(path, data):
-    with tempfile.NamedTemporaryFile(dir=path.parent, prefix=path.name + '.', delete=False) as stream:
-        temporary = Path(stream.name)
-        try:
+    fd, name = tempfile.mkstemp(dir=path.parent, prefix=path.name + '.')
+    temporary = Path(name)
+    try:
+        with os.fdopen(fd, 'wb') as stream:
             stream.write(data)
             stream.flush()
             os.fsync(stream.fileno())
-            shutil.copystat(path, temporary)
-            temporary.replace(path)
-        finally:
-            temporary.unlink(missing_ok=True)
+        shutil.copystat(path, temporary)
+        temporary.replace(path)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def nginx_block(domain, port):
