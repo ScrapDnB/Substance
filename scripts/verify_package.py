@@ -45,9 +45,12 @@ def main():
             if not path.is_file() or not path.resolve().is_relative_to(dist):
                 raise RuntimeError(f"Missing bundled {key}: {report.get(key)}")
         for key in ("ffmpeg", "ffprobe"):
-            subprocess.run([report[key], "-version"], cwd=temporary, env=environment,
-                           stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
-                           check=True, timeout=30)
+            result = subprocess.run([report[key], "-version"], cwd=temporary, env=environment,
+                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30)
+            (qa / f"ci-package-{key}.log").write_bytes(result.stdout + result.stderr)
+            if result.returncode:
+                raise RuntimeError(f"Bundled {key} failed ({result.returncode}): "
+                                   + result.stderr.decode('utf-8', errors='replace'))
         subprocess.run([report['whisper'], '--help'], cwd=temporary, env=environment,
                        stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, check=True, timeout=30)
     print("Packaged QML, platform style, FFmpeg and ffprobe verified", flush=True)

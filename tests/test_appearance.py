@@ -169,6 +169,7 @@ def test_live_settings_preserve_edit_and_reorder_real_panels(ui):
     undo_before = b.canUndo
     editor.setProperty('text', 'Незавершённая правка')
     editor.setProperty('cursorPosition', 7)
+    b._stage_timer.stop()
     QTest.qWait(30)
     a = b.appearance
     a.setValue('general', 'editorFont', 24)

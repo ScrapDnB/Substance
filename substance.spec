@@ -55,6 +55,14 @@ portable_probe = root / 'build/portable/bin/ffprobe'
 ffprobe = os.environ.get("SUBSTANCE_FFPROBE") or (str(portable_probe) if portable_probe.is_file() else shutil.which("ffprobe"))
 if ffprobe:
     binaries.append((ffprobe, "."))
+portable_media = []
+if sys.platform == 'darwin':
+    from PyInstaller.depend.bindepend import binary_dependency_analysis
+    portable_media = binary_dependency_analysis(
+        [(Path(source).name, source, 'BINARY') for source in (libass, ffprobe) if source],
+        symlink_suppression_patterns=set())
+    binaries += [(source, str(Path(destination).parent))
+                 for destination, source, kind in portable_media if kind == 'BINARY']
 if sys.platform == "win32":
     for entry in list(binaries):
         # MSYS2 libass has several dependent DLLs. Bundle the transitive closure.
@@ -81,6 +89,12 @@ a = Analysis([str(root / "run.py")], pathex=[str(root)], binaries=binaries, data
     hiddenimports=(["Vision", "Quartz", "CoreML"] if sys.platform == "darwin" else []) + ["paramiko", "cv2", "onnxruntime", "PIL.Image", "filelock", "PySide6.QtSvg", "substance.visuals", "spellchecker", "dubbing_online_client.api", "dubbing_online_client.documents", "dubbing_online_client.repository", "dubbing_online_client.credentials", "keyring.backends.macOS" if sys.platform == "darwin" else "keyring.backends.Windows"],
     excludes=["tkinter", "_tkinter", "PySide6.QtWebEngineCore", "PySide6.QtWebEngineQuick", "PySide6.QtWebEngineWidgets", "PySide6.QtCharts", "PySide6.QtDataVisualization", "PySide6.Qt3DCore", "PySide6.Qt3DExtras", "PySide6.QtDesigner"],
     noarchive=False)
+if portable_media:
+    # OpenCV ships older copies of common media libraries. Its generated
+    # top-level symlinks must not replace the compatible ffprobe/libass set.
+    media_names = {destination for destination, _, _ in portable_media}
+    a.binaries = [entry for entry in a.binaries if entry[0] not in media_names] + portable_media
+    a.datas = [entry for entry in a.datas if entry[0] not in media_names]
 pyz = PYZ(a.pure)
 icon = str(root / "substance/resources" / ("icon.icns" if sys.platform == "darwin" else "icon.ico"))
 exe = NativeSDKEXE(pyz, a.scripts, [], exclude_binaries=True, name="Substance", debug=False,
