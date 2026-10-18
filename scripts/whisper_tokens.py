@@ -12,7 +12,7 @@ def replace_once(text, old, new):
 
 def patch_whisper(source):
     cli = Path(source) / 'examples/cli/cli.cpp'
-    text = cli.read_text()
+    text = cli.read_text(encoding='utf-8')
     if '--substance-tokens' not in text:
         text = replace_once(text, '    bool split_on_word   = false;',
                             '    bool substance_tokens = false;\n    bool split_on_word   = false;')
@@ -42,16 +42,16 @@ def patch_whisper(source):
 
         if (!params.no_timestamps) {
             printf("[%s --> %s]  ",''')
-        cli.write_text(text)
+        cli.write_text(text, encoding='utf-8')
 
     # Upstream's experimental DTW callback passes segment indices as counts
     # and omits later batches. Emit each completed batch exactly once.
     core = Path(source) / 'src/whisper.cpp'
-    text = core.read_text()
+    text = core.read_text(encoding='utf-8')
     old = '''                        for (int seg = (int) result_all.size() - n_segments; seg < n_segments; seg++) {
                             params.new_segment_callback(ctx, state, seg, params.new_segment_callback_user_data);
                         }'''
     new = '''                        // Substance token stream: one callback per completed DTW batch.
                         params.new_segment_callback(ctx, state, n_segments, params.new_segment_callback_user_data);'''
     if new not in text:
-        core.write_text(replace_once(text, old, new))
+        core.write_text(replace_once(text, old, new), encoding='utf-8')
