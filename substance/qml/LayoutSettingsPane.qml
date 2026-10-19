@@ -13,6 +13,11 @@ ScrollView {
     ColumnLayout {
         width: pane.availableWidth
         spacing: 18
+        Loader {
+            active: pane.timing
+            Layout.fillWidth: true
+            sourceComponent: TimingShortcutSettings { colors: pane.colors }
+        }
         WorkspacePreview { colors: pane.colors; mode: pane.mode; Layout.fillWidth: true }
         Label { text: "Схема обновляется вместе с рабочим окном. Настройки " + (pane.timing ? "перевода" : "тайминга") + " сохраняются отдельно."; wrapMode: Text.Wrap; Layout.fillWidth: true; color: pane.colors.muted; font.pixelSize: 11 }
         DialogSection {

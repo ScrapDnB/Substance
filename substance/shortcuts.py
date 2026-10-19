@@ -6,7 +6,7 @@ text and unbound combinations retain their original key and text.
 import sys
 
 from PySide6.QtCore import QObject, QEvent, Qt
-from PySide6.QtGui import QKeyEvent, QKeySequence
+from PySide6.QtGui import QKeyEvent, QKeySequence, QWindow
 from PySide6.QtWidgets import QApplication, QKeySequenceEdit
 
 
@@ -22,6 +22,22 @@ PC_KEYS = {**dict(zip(range(2, 14), "1234567890-=")),
            43: "\\", **dict(zip(range(44, 54), "ZXCVBNM,./"))}
 SHIFTED = dict(zip("1234567890-=[]\\;',./`", "!@#$%^&*()_+{}|:\"<>?~"))
 COMMAND_MODIFIERS = Qt.ControlModifier | Qt.AltModifier | Qt.MetaModifier
+
+# Qt calls Command "Ctrl" and physical Control "Meta" on macOS.
+TIMING_NUDGES = {
+    'nudge' + edge.title() + direction + suffix: (edge, sign, fine)
+    for edge in ('start', 'end', 'both')
+    for direction, sign in (('Back', -1), ('Forward', 1))
+    for suffix, fine in (('', False), ('Fine', True))
+}
+
+
+def timing_shortcut_defaults(platform):
+    modifiers = {'start': 'Meta' if platform == 'darwin' else 'Ctrl',
+                 'end': 'Ctrl' if platform == 'darwin' else 'Ctrl+Alt', 'both': 'Alt'}
+    return {name: modifiers[edge] + ('+Shift' if fine else '') +
+            ('+Left' if direction < 0 else '+Right')
+            for name, (edge, direction, fine) in TIMING_NUDGES.items()}
 
 
 def physical_character(event, platform):
@@ -68,6 +84,12 @@ class LayoutShortcuts(QObject):
             if parsed.count() == 1:
                 combination = parsed[0]
                 self.bindings.add((int(combination.key()), combination.keyboardModifiers().value))
+        self.timing_bindings = {}
+        for name, command in TIMING_NUDGES.items():
+            parsed = QKeySequence(self.backend.shortcuts.get(name, ''))
+            if parsed.count() == 1:
+                combination = parsed[0]
+                self.timing_bindings[(int(combination.key()), combination.keyboardModifiers().value)] = command
 
     def _capture_focused(self):
         item = self.app.focusWidget()
@@ -89,6 +111,17 @@ class LayoutShortcuts(QObject):
         if self._forwarding or event.type() not in (QEvent.ShortcutOverride, QEvent.KeyPress, QEvent.KeyRelease):
             return False
         character = self._command_character(physical_character(event, self.platform), event.modifiers())
+        command = self.timing_bindings.get((ord(character) if character else event.key(), event.modifiers().value))
+        # QWindow is the actual key-event target. During native activation
+        # transitions QApplication.focusWindow() can still refer to the old one.
+        window = receiver if isinstance(receiver, QWindow) else self.app.focusWindow()
+        if command and window is not None and window.objectName() == 'substanceWindow' and window.property('timingShortcutsEnabled'):
+            # Reserve these commands before TextInput's cursor/selection keys.
+            # This also supports auto-repeat and physical keys in other layouts.
+            if event.type() == QEvent.KeyPress:
+                self.backend.nudgeTiming(*command)
+            event.accept()
+            return True
         if character is None or ord(character) == event.key():
             return False
         if event.type() == QEvent.ShortcutOverride:

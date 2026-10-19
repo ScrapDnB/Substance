@@ -26,7 +26,7 @@ from .tasks import SpellingTask, ExtractTask
 from .timecode import format_time, parse_time
 from .platform import reduce_motion
 from .project import sync_characters
-from .shortcuts import LayoutShortcuts
+from .shortcuts import LayoutShortcuts, TIMING_NUDGES, timing_shortcut_defaults
 from .images import load_image, encode_image, decode_image, crop_image
 from PySide6.QtGui import QImage
 import difflib
@@ -37,10 +37,11 @@ SHORTCUTS = {
     "undo": "Ctrl+Z", "redo": "Ctrl+Shift+Z", "find": "Ctrl+F", "replace": "Ctrl+H", "apply": "Ctrl+Return",
     "add": "Ctrl+Return", "newLine": "Ctrl+Shift+Return", "duplicate": "Ctrl+D", "split": "Ctrl+Shift+D", "merge": "Ctrl+J",
     "previous": "Alt+Up", "next": "Alt+Down", "play": "Ctrl+Space", "playLine": "Alt+Space",
-    "setStart": "Ctrl+1", "setEnd": "Ctrl+2", "frameBack": "Alt+Left", "frameForward": "Alt+Right",
+    "setStart": "Ctrl+1", "setEnd": "Ctrl+2", "frameBack": "Alt+,", "frameForward": "Alt+.",
     "shift": "Ctrl+Shift+T", "copyLines": "Ctrl+Shift+C", "pasteLines": "Ctrl+Shift+V", "deleteLines": "Ctrl+Shift+Backspace",
     "assignCharacter": "Ctrl+`",
     "formatBold": "Ctrl+B", "formatItalic": "Ctrl+I", "formatUnderline": "Ctrl+U",
+    **timing_shortcut_defaults(sys.platform),
 }
 
 
@@ -224,9 +225,16 @@ class Backend(QObject):
         self._line_count_limit = self.settings.value('lineCountLimit', 2, type=int)
         self._document_defaults = self.defaultReviewSettings
         self.editor.document.review_settings = dict(self._document_defaults)
+        self._timing_steps = {name: max(1, min(5000, self.settings.value('timing/' + name, default, type=int)))
+                              for name, default in (('step', 100), ('fineStep', 10))}
         default_shortcuts = {**SHORTCUTS, **({"redo": "Ctrl+Y"} if sys.platform == "win32" else {"play": "Ctrl+Shift+Space"} if sys.platform == "darwin" else {})}
         try:
             self._shortcuts = {**default_shortcuts, **json.loads(self.settings.value("shortcuts", "{}"))}
+            # Free Option/Alt+arrows for cue movement in existing preferences.
+            for name, old in (('frameBack', 'Alt+Left'), ('frameForward', 'Alt+Right')):
+                if self._shortcuts.get(name) == old:
+                    self._shortcuts[name] = default_shortcuts[name]
+                    self.settings.setValue('shortcuts', json.dumps(self._shortcuts))
             if self._shortcuts.get("assignCharacter") in ("Ctrl+?", "Ctrl+Shift+?"):
                 self._shortcuts["assignCharacter"] = default_shortcuts["assignCharacter"]
                 self.settings.setValue("shortcuts", json.dumps(self._shortcuts))
@@ -713,6 +721,30 @@ class Backend(QObject):
     def shortcuts(self):
         return self._shortcuts
 
+    @Property('QVariantMap', notify=preferencesChanged)
+    def timingSteps(self):
+        return dict(self._timing_steps)
+
+    @Slot(str, int)
+    def setTimingStep(self, name, value):
+        if name not in self._timing_steps:
+            return
+        value = max(1, min(5000, value))
+        self._timing_steps[name] = value
+        self.settings.setValue('timing/' + name, value)
+        self.preferencesChanged.emit()
+
+    @Slot()
+    def resetTimingControls(self):
+        defaults = timing_shortcut_defaults(sys.platform)
+        if any(value in defaults.values() for key, value in self._shortcuts.items() if key not in TIMING_NUDGES):
+            self.show_error('Стандартные сочетания тайминга заняты другими командами. Измените их в настройках горячих клавиш.')
+            return
+        self._shortcuts.update(defaults)
+        self.settings.setValue('shortcuts', json.dumps(self._shortcuts))
+        self.setTimingStep('step', 100)
+        self.setTimingStep('fineStep', 10)
+
     @Property(bool, notify=spellingChanged)
     def spellingBusy(self):
         return self._spelling_busy
@@ -1113,6 +1145,23 @@ class Backend(QObject):
     def setEdge(self, edge):
         self._guard(lambda: self.editor.update(self._current, **{edge: self.media_controller.framePosition}))
 
+    @Slot(str, int, bool)
+    def nudgeTiming(self, edge, direction, fine=False):
+        if self.busy or edge not in ('start', 'end', 'both') or direction not in (-1, 1) or not 0 <= self._current < self.count:
+            return
+        def command():
+            cue = self.editor.document.cues[self._current]
+            delta = direction * self._timing_steps['fineStep' if fine else 'step']
+            if edge == 'both':
+                delta = max(-cue.start, delta)
+                values = dict(start=cue.start + delta, end=cue.end + delta)
+            elif edge == 'start':
+                values = dict(start=max(0, min(cue.end, cue.start + delta)))
+            else:
+                values = dict(end=max(cue.start, cue.end + delta))
+            self.editor.update(self._current, **values)
+        self._guard(command)
+
     @Slot(int)
     def stepFrame(self, direction):
         position = self.media_controller.framePosition
@@ -1205,7 +1254,7 @@ class Backend(QObject):
     def setShortcut(self, action, sequence):
         parsed = QKeySequence(sequence)
         normalized = parsed.toString(QKeySequence.SequenceFormat.PortableText)
-        if not normalized or parsed.isEmpty():
+        if not normalized or parsed.isEmpty() or (action in TIMING_NUDGES and parsed.count() != 1):
             self.show_error("Некорректное сочетание клавиш")
             return False
         conflicts = [key for key, value in self._shortcuts.items() if value == normalized and key != action and key != "add"]

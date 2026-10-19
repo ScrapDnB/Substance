@@ -30,6 +30,7 @@ ApplicationWindow {
     readonly property bool sidebarVisible: appearance.sidebarVisible
     function toggleSidebar() { backend.appearance.setValue("general", "sidebarVisible", !sidebarVisible) }
     property int editCursor: 0
+    readonly property bool timingShortcutsEnabled: backend.current.exists && !backend.busy && !modalOpen && !toolSection
     readonly property var appearance: backend.appearance.general
     readonly property var editorColors: window.dark ? backend.appearance.darkColors : backend.appearance.lightColors
     function selectionText(value) {
