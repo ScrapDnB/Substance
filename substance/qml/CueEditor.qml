@@ -28,6 +28,19 @@ Pane {
     padding: 0
     background: Rectangle { color: panel.colors.panel }
 
+    function revealCompactText() {
+        if (height >= 400 * uiScale || startField.activeFocus || endField.activeFocus || characterField.activeFocus)
+            return
+        let flick = editorScroll.contentItem
+        if (!flick || !flick.contentItem) return
+        let point = editTextArea.mapToItem(flick.contentItem, 0, 0)
+        let bottom = point.y + Math.min(editTextArea.height, 48 * uiScale)
+        if (bottom > flick.contentY + flick.height)
+            flick.contentY = Math.min(Math.max(0, flick.contentHeight - flick.height), bottom - flick.height)
+    }
+    onHeightChanged: Qt.callLater(revealCompactText)
+    onWidthChanged: Qt.callLater(revealCompactText)
+
     function scheduleInheritance() {
         inheritancePending = true
         Qt.callLater(panel.applyPendingInheritance)
@@ -98,7 +111,7 @@ Pane {
     }
     Connections {
         target: backend
-        function onCurrentChanged() { panel.reload() }
+        function onCurrentChanged() { checksPopup.close(); reviewsPopup.close(); panel.reload() }
         function onFocusEditor() { editTextArea.forceActiveFocus() }
         function onHighlightWord(word) {
             let start = editTextArea.text.indexOf(word)
@@ -106,6 +119,50 @@ Pane {
                 editTextArea.forceActiveFocus()
                 editTextArea.select(start, start + word.length)
             }
+        }
+    }
+
+    CueStatusPopup {
+        id: checksPopup
+        objectName: "cueChecksPopup"
+        anchorItem: checksToggle
+        colors: panel.colors
+        title: "Проверка"
+        Label {
+            objectName: "cueChecksDetails"
+            Layout.fillWidth: true
+            text: backend.current.issues.length ? "⚠ " + backend.current.issues.join("\n⚠ ") : "Читаемость в норме"
+            color: backend.current.issues.length ? panel.colors.warning : panel.colors.label
+            font.pixelSize: Math.round(12 * panel.uiScale)
+            wrapMode: Text.Wrap
+            textFormat: Text.PlainText
+        }
+    }
+    CueStatusPopup {
+        id: reviewsPopup
+        objectName: "cueReviewsPopup"
+        anchorItem: reviewsToggle
+        colors: panel.colors
+        title: "Заметки и правки"
+        Label {
+            objectName: "cueReviewsDetails"
+            Layout.fillWidth: true
+            text: { let entry = backend.currentReviews.find(r => r.state === "open"); return entry ? (entry.kind === "note" ? "✎ " : "↔ ") + (entry.text || entry.replacement.replace(/\\N/g, " ")) : "Нет открытых заметок и предложений правок" }
+            textFormat: Text.PlainText
+            color: panel.colors.label
+            font.pixelSize: Math.round(12 * panel.uiScale)
+            wrapMode: Text.Wrap
+        }
+        Button {
+            objectName: "cueAllReviewsButton"
+            text: "Все заметки и правки…"
+            Layout.fillWidth: true
+            onClicked: { reviewsPopup.close(); backend.openReviews() }
+        }
+        RowLayout {
+            Layout.fillWidth: true
+            Button { objectName: "cueAddNoteButton"; text: "+ Заметка"; Layout.fillWidth: true; onClicked: { reviewsPopup.close(); panel.composeRequested("note") } }
+            Button { objectName: "cueProposeEditButton"; text: "Предложить правку"; Layout.fillWidth: true; onClicked: { reviewsPopup.close(); panel.composeRequested("proposal") } }
         }
     }
 
@@ -137,6 +194,10 @@ Pane {
             ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
             clip: true
             contentWidth: availableWidth
+            Connections {
+                target: editorScroll.contentItem
+                function onContentHeightChanged() { Qt.callLater(panel.revealCompactText) }
+            }
             ColumnLayout {
                 width: editorScroll.availableWidth
                 height: Math.max(editorScroll.availableHeight, implicitHeight)
@@ -175,21 +236,27 @@ Pane {
                 }
                 Rectangle { Layout.fillWidth: true; implicitHeight: 1; color: panel.colors.separator }
                 GridLayout {
+                    id: textLayout
                     objectName: "editorTextLayout"
                     Layout.fillWidth: true
                     Layout.fillHeight: true
-                    Layout.minimumHeight: panel.translationMode && backend.appearance.translation.originalBelow ? 200 : 120
+                    Layout.minimumHeight: Math.max(panel.translationMode && backend.appearance.translation.originalBelow ? 200 : 120,
+                        columns === 2 ? Math.max(originalColumn.minimumTextHeight, editColumn.minimumTextHeight)
+                            : editColumn.minimumTextHeight + (originalColumn.visible ? originalColumn.minimumTextHeight + rowSpacing : 0))
                     Layout.preferredHeight: Layout.minimumHeight
                     columns: panel.translationMode && !backend.appearance.translation.originalBelow ? 2 : 1
                     columnSpacing: 12
                     rowSpacing: 8
                     ColumnLayout {
+                        id: originalColumn
+                        readonly property real minimumTextHeight: originalHeading.implicitHeight + formattingTools.implicitHeight + 48 + 2 * spacing
                         visible: panel.translationMode
                         Layout.preferredWidth: 1
                         Layout.fillWidth: true
                         Layout.fillHeight: true
                         spacing: 5
                         GridLayout {
+                            id: originalHeading
                             Layout.fillWidth: true
                             columns: width > 280 * panel.uiScale ? 2 : 1
                             rowSpacing: 0
@@ -222,11 +289,14 @@ Pane {
                         }
                     }
                     ColumnLayout {
+                        id: editColumn
+                        readonly property real minimumTextHeight: editHeading.implicitHeight + formattingTools.implicitHeight + 48 + 2 * spacing
                         Layout.preferredWidth: 1
                         Layout.fillWidth: true
                         Layout.fillHeight: true
                         spacing: 5
                         GridLayout {
+                            id: editHeading
                             Layout.fillWidth: true
                             columns: width > 280 * panel.uiScale ? 2 : 1
                             rowSpacing: 0
@@ -251,77 +321,83 @@ Pane {
                             AssFormatButton { editor: panel; tag: "s"; label: "Зачёркивание" }
                             Item { Layout.fillWidth: true }
                         }
-                        ScrollView {
+                        RowLayout {
                             Layout.fillWidth: true
                             Layout.fillHeight: true
-                            Layout.minimumHeight: 48
-                            contentWidth: availableWidth
-                            rightPadding: Math.round(14 * panel.uiScale)
-                            bottomPadding: 0
-                            ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
-                            clip: true
-                            DialogTextArea {
-                                id: editTextArea
-                                objectName: "subtitleEditor"
-                                textFormat: TextEdit.PlainText
-                                enabled: backend.current.exists
-                                placeholderText: panel.translationMode ? "Введите перевод…" : "Введите текст…"
-                                wrapMode: TextEdit.Wrap
-                                selectByMouse: true
-                                persistentSelection: true
-                                font.pixelSize: panel.appearance.editorFont
-                                font.family: panel.appearance.textFamily || panel.font.family
-                                color: panel.colors.editorText
-                                palette.base: panel.colors.editorBackground
-                                selectionColor: panel.colors.selection
-                                selectedTextColor: panel.colors.selectedText
-                                onTextChanged: { panel.stageText(); panel.selectionChanged(editTextArea, "translation") }
-                                onSelectionStartChanged: panel.selectionChanged(editTextArea, "translation")
-                                onSelectionEndChanged: panel.selectionChanged(editTextArea, "translation")
-                                onCursorPositionChanged: panel.editorCursorChanged(cursorPosition)
-                                Accessible.name: panel.translationMode ? "Текст перевода" : "Текст реплики"
+                            spacing: Math.round(4 * panel.uiScale)
+                            ScrollView {
+                                Layout.fillWidth: true
+                                Layout.fillHeight: true
+                                Layout.minimumHeight: 48
+                                contentWidth: availableWidth
+                                rightPadding: Math.round(8 * panel.uiScale)
+                                bottomPadding: 0
+                                ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
+                                clip: true
+                                DialogTextArea {
+                                    id: editTextArea
+                                    objectName: "subtitleEditor"
+                                    textFormat: TextEdit.PlainText
+                                    enabled: backend.current.exists
+                                    placeholderText: panel.translationMode ? "Введите перевод…" : "Введите текст…"
+                                    wrapMode: TextEdit.Wrap
+                                    selectByMouse: true
+                                    persistentSelection: true
+                                    font.pixelSize: panel.appearance.editorFont
+                                    font.family: panel.appearance.textFamily || panel.font.family
+                                    color: panel.colors.editorText
+                                    palette.base: panel.colors.editorBackground
+                                    selectionColor: panel.colors.selection
+                                    selectedTextColor: panel.colors.selectedText
+                                    onTextChanged: { panel.stageText(); panel.selectionChanged(editTextArea, "translation") }
+                                    onSelectionStartChanged: panel.selectionChanged(editTextArea, "translation")
+                                    onSelectionEndChanged: panel.selectionChanged(editTextArea, "translation")
+                                    onCursorPositionChanged: panel.editorCursorChanged(cursorPosition)
+                                    Accessible.name: panel.translationMode ? "Текст перевода" : "Текст реплики"
+                                }
+                            }
+                            ColumnLayout {
+                                Layout.alignment: Qt.AlignTop
+                                spacing: Math.round(2 * panel.uiScale)
+                                CueStatusButton {
+                                    id: checksToggle
+                                    objectName: "cueChecksToggle"
+                                    checkable: false
+                                    checked: checksPopup.visible
+                                    onClicked: {
+                                        if (checksPopup.visible) checksPopup.close()
+                                        else { reviewsPopup.close(); checksPopup.open() }
+                                    }
+                                    symbol: "checks"
+                                    hint: "Проверка текущей реплики" + (count > 0 ? " · " + count : " · в норме")
+                                    count: backend.current.issues.length
+                                    badgeColor: panel.colors.accent
+                                    badgeTextColor: panel.colors.accentText
+                                    palette.buttonText: count > 0 ? panel.colors.warning : panel.colors.label
+                                    enabled: backend.current.exists
+                                }
+                                CueStatusButton {
+                                    id: reviewsToggle
+                                    objectName: "cueReviewsToggle"
+                                    checkable: false
+                                    checked: reviewsPopup.visible
+                                    onClicked: {
+                                        if (reviewsPopup.visible) reviewsPopup.close()
+                                        else { checksPopup.close(); reviewsPopup.open() }
+                                    }
+                                    symbol: "reviews"
+                                    hint: "Заметки и предложения правок текущей реплики" + (count > 0 ? " · " + count : "")
+                                    count: backend.currentReviews.filter(r => r.state === "open").length
+                                    badgeColor: panel.colors.accent
+                                    badgeTextColor: panel.colors.accentText
+                                    palette.buttonText: panel.colors.label
+                                    enabled: backend.current.exists && !backend.onlineSession.active
+                                }
                             }
                         }
                     }
                 }
-                Rectangle { visible: checksToggle.checked || reviewsToggle.checked; Layout.fillWidth: true; implicitHeight: 1; color: panel.colors.separator }
-                ColumnLayout {
-                    Layout.fillWidth: true
-                    visible: checksToggle.checked || reviewsToggle.checked
-                    spacing: 4
-                    Label {
-                        objectName: "cueChecksDetails"
-                        visible: checksToggle.checked
-                        Layout.fillWidth: true
-                        Layout.margins: 4
-                        text: backend.current.issues.length ? "⚠ " + backend.current.issues.join("\n⚠ ") : "Читаемость в норме"
-                        color: backend.current.issues.length ? panel.colors.warning : panel.colors.label
-                        font.pixelSize: Math.round(12 * panel.uiScale)
-                        wrapMode: Text.Wrap
-                        textFormat: Text.PlainText
-                    }
-                    ColumnLayout {
-                        visible: reviewsToggle.checked
-                        Layout.fillWidth: true
-                        Label {
-                            Layout.fillWidth: true
-                            text: { let entry = backend.currentReviews.find(r => r.state === "open"); return entry ? (entry.kind === "note" ? "✎ " : "↔ ") + (entry.text || entry.replacement.replace(/\\N/g, " ")) : "Нет открытых заметок и предложений правок" }
-                            textFormat: Text.PlainText
-                            color: panel.colors.label
-                            font.pixelSize: Math.round(12 * panel.uiScale)
-                            wrapMode: Text.Wrap
-                            maximumLineCount: 3
-                            elide: Text.ElideRight
-                        }
-                        GridLayout {
-                            Layout.fillWidth: true
-                            columns: width >= 500 * panel.uiScale ? 3 : 1
-                            Button { text: "Все заметки и правки…"; Layout.fillWidth: true; onClicked: backend.openReviews() }
-                            Button { text: "+ Заметка"; Layout.fillWidth: true; onClicked: panel.composeRequested("note") }
-                            Button { text: "Предложить правку"; Layout.fillWidth: true; onClicked: panel.composeRequested("proposal") }
-                        }
-                    }
-                }
+
             }
         }
         Pane {
@@ -336,34 +412,8 @@ Pane {
                 spacing: 6
                 RowLayout {
                     Layout.fillWidth: true
-                    Button {
-                        id: checksToggle
-                        objectName: "cueChecksToggle"
-                        Layout.fillWidth: true
-                        flat: true
-                        checkable: true
-                        onToggled: if (checked) Qt.callLater(() => { let view = editorScroll.contentItem; view.contentY = Math.max(0, view.contentHeight - view.height) })
-                        text: (checked ? "▾  " : "▸  ") + "Проверка · " + (backend.current.issues.length ? backend.current.issues.length : "в норме")
-                        palette.buttonText: backend.current.issues.length ? panel.colors.warning : panel.colors.label
-                        Accessible.name: "Проверка текущей реплики"
-                    }
-                    Button {
-                        id: reviewsToggle
-                        objectName: "cueReviewsToggle"
-                        Layout.fillWidth: true
-                        flat: true
-                        checkable: true
-                        onToggled: if (checked) Qt.callLater(() => { let view = editorScroll.contentItem; view.contentY = Math.max(0, view.contentHeight - view.height) })
-                        text: (checked ? "▾  " : "▸  ") + (panel.width < 520 * panel.uiScale ? "Заметки · " : "Заметки и правки · ") + backend.currentReviews.filter(r => r.state === "open").length
-                        Accessible.name: "Заметки и предложения правок текущей реплики"
-                        enabled: backend.current.exists && !backend.onlineSession.active
-                    }
-                }
-                Rectangle { Layout.fillWidth: true; implicitHeight: 1; color: panel.colors.separator }
-                RowLayout {
-                    Layout.fillWidth: true
                     Label { text: backend.current.cps + " зн/с"; color: backend.reviewSettings.readingSpeed && backend.current.cps > backend.cpsLimit ? panel.colors.warning : panel.colors.muted; font.pixelSize: Math.round(12 * panel.uiScale) }
-                    Label { text: "Строка · " + (backend.current.maxLine || 0) + " / " + backend.lineLimit; visible: panel.width >= 450 * panel.uiScale; color: panel.colors.label; font.pixelSize: Math.round(12 * panel.uiScale); ToolTip.text: "Длина самой длинной строки / ограничение"; ToolTip.visible: metricHover.hovered; HoverHandler { id: metricHover } }
+                    Label { text: "Строка · " + (backend.current.maxLine || 0) + (backend.reviewSettings.lineLength ? " / " + backend.lineLimit : ""); visible: panel.width >= 450 * panel.uiScale; color: panel.colors.label; font.pixelSize: Math.round(12 * panel.uiScale); ToolTip.text: backend.reviewSettings.lineLength ? "Длина самой длинной строки / ограничение" : "Длина самой длинной строки. Проверка длины отключена."; ToolTip.visible: metricHover.hovered; HoverHandler { id: metricHover } }
                     Item { Layout.fillWidth: true }
                     ControlButton { objectName: "playCueButton"; symbol: "play"; enabled: backend.media.hasMedia && backend.current.exists; onClicked: backend.playCurrent(false); hint: "Воспроизвести реплику · " + backend.shortcutLabel("playLine") }
                     ControlButton {

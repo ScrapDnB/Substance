@@ -4,8 +4,8 @@ import pytest
 import shiboken6
 from pathlib import Path
 
-from PySide6.QtCore import QObject, QPointF, QSettings, QUrl, Qt, qInstallMessageHandler
-from PySide6.QtGui import QImage, QPainter
+from PySide6.QtCore import QCoreApplication, QObject, QPoint, QPointF, QSettings, QUrl, Qt, qInstallMessageHandler
+from PySide6.QtGui import QImage, QInputDevice, QNativeGestureEvent, QPainter, QPointingDevice, QWheelEvent
 from PySide6.QtQml import QQmlApplicationEngine
 from PySide6.QtQuickControls2 import QQuickStyle
 from PySide6.QtTest import QTest
@@ -173,3 +173,82 @@ def test_controls_fit_small_window_with_largest_ui(ui, mode):
         assert origin.x() + item.width() <= pane.width() + 1
         assert origin.y() + item.height() <= pane.height() + 1
     assert not window.grabWindow().isNull()
+
+
+@pytest.mark.parametrize('workspace', ['timing', 'translation'])
+@pytest.mark.parametrize('display', ['wave', 'spectrum', 'tracks'])
+def test_trackpad_events_reach_audio_view_and_preserve_pointer_time(ui, workspace, display):
+    backend, window = ui
+    backend.setMode(workspace)
+    backend.editorTools.setDisplayMode(display)
+    QTest.qWait(80)
+    pane = window.findChild(QObject, 'timingAudio' if workspace == 'timing' else 'translationAudio')
+    wave = pane.findChild(QObject, 'audioWaveform')
+    before = backend.editor.document.to_dict()
+    wave.setViewport(5000, 10000)
+    QTest.qWait(20)
+    local = QPointF(wave.width() * 0.7, wave.height() * 0.6)
+    if display == 'tracks':
+        # Exercise navigation through an actual cue's MouseArea, not empty space.
+        def descendants(item):
+            for child in item.childItems():
+                yield child
+                yield from descendants(child)
+
+        items = list(descendants(wave.parentItem()))
+        drag = next(item for item in items if item.objectName() == 'trackDrag_4')
+        local = wave.mapFromItem(drag, QPointF(drag.width() / 2, drag.height() / 2))
+    fraction = local.x() / wave.width()
+    scene = wave.mapToScene(local)
+    global_pos = QPointF(window.mapToGlobal(scene.toPoint()))
+
+    def scroll(pixels, angles=(0, 0), modifiers=Qt.KeyboardModifier.NoModifier,
+               phase=Qt.ScrollPhase.ScrollUpdate):
+        # Native trackpad events carry angle deltas too; Qt treats zero-angle
+        # ScrollUpdate events after an accepted event as compatibility duplicates.
+        event = QWheelEvent(scene, global_pos, QPoint(*pixels), QPoint(*angles),
+                            Qt.MouseButton.NoButton, modifiers, phase, False)
+        event.setTimestamp(scroll.timestamp)
+        scroll.timestamp += 10
+        QCoreApplication.sendEvent(window, event)
+
+    scroll.timestamp = 10
+
+    scroll((-30, 0), (-30, 0))
+    assert wave.viewStart == round(5000 + 30 * 10000 / wave.width())
+    assert wave.span == 10000
+    scroll((-10, 0), phase=Qt.ScrollPhase.ScrollMomentum)
+    assert wave.viewStart > 5000 + 30 * 10000 / wave.width()
+    scroll((0, 0), phase=Qt.ScrollPhase.ScrollEnd)
+    scroll((0, 0), modifiers=Qt.KeyboardModifier.MetaModifier, phase=Qt.ScrollPhase.ScrollBegin)
+    anchor = wave.viewStart + wave.span * fraction
+    scroll((0, 12), (0, 12), modifiers=Qt.KeyboardModifier.MetaModifier)
+    scroll((0, 0), modifiers=Qt.KeyboardModifier.MetaModifier, phase=Qt.ScrollPhase.ScrollEnd)
+    assert 9000 < wave.span < 10000
+    assert wave.viewStart + wave.span * fraction == pytest.approx(anchor, abs=1)
+
+    device = QPointingDevice('Test touchpad', 123, QInputDevice.DeviceType.TouchPad,
+                             QPointingDevice.PointerType.Finger,
+                             QInputDevice.Capability.Position, 2, 0)
+
+    def gesture(kind, value):
+        event = QNativeGestureEvent(kind, device, 2, scene, scene, global_pos, value, QPointF())
+        QCoreApplication.sendEvent(window, event)
+
+    span = wave.span
+    gesture(Qt.NativeGestureType.BeginNativeGesture, 0)
+    gesture(Qt.NativeGestureType.ZoomNativeGesture, 0.2)
+    gesture(Qt.NativeGestureType.EndNativeGesture, 0)
+    assert wave.span == pytest.approx(round(span / 1.2), abs=1)
+    assert wave.viewStart + wave.span * fraction == pytest.approx(anchor, abs=1)
+    # A second gesture must not reuse the previous gesture's cumulative scale.
+    span = wave.span
+    gesture(Qt.NativeGestureType.BeginNativeGesture, 0)
+    gesture(Qt.NativeGestureType.ZoomNativeGesture, -0.1)
+    gesture(Qt.NativeGestureType.EndNativeGesture, 0)
+    assert wave.span == pytest.approx(round(span / 0.9), abs=1)
+    assert wave.viewStart + wave.span * fraction == pytest.approx(anchor, abs=1.5)
+    tracks = pane.findChild(QObject, 'subtitleTracks')
+    assert tracks.property('span') == wave.span
+    assert tracks.property('viewStart') == wave.viewStart
+    assert backend.editor.document.to_dict() == before

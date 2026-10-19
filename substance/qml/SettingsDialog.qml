@@ -17,21 +17,11 @@ NativeDialog {
         {title: "Текст и размеры", subtitle: "Шрифты, строки и масштаб", icon: "Aa", keywords: "шрифт размер масштаб текст оригинал перевод таблица перенос высота плотность таймкод ноль цифры"},
         {title: "Тайминг", subtitle: "Расположение панелей", icon: "◷", keywords: "тайминг раскладка расположение видео аудио ширина высота"},
         {title: "Перевод", subtitle: "Расположение панелей", icon: "文", keywords: "перевод раскладка расположение видео аудио контекст оригинал редактор"},
-        {title: "Проверки и импорт", subtitle: "Читаемость и кодировки", icon: "✓", keywords: "проверки чтение скорость строка длина импорт кодировка"},
-        {title: "Документ", subtitle: "Параметры текущего файла", icon: "▤", keywords: "документ fps кадры ASS кодировка проект"},
+        {title: "Проверки и импорт", subtitle: "Новые документы и кодировки", icon: "✓", keywords: "проверки чтение скорость строка длина количество пересечения импорт кодировка"},
         {title: "Горячие клавиши", subtitle: "Команды редактора", icon: "⌘", keywords: "горячие клавиши сочетания команды"},
         {title: "Словарь и перевод", subtitle: "Языки, сервисы и инструкции", icon: "文", keywords: "словарь перевод языки azure deepl libretranslate ключ api инструкция подключение"}
     ]
-    function reloadDocument() {
-        fps.text = backend.fps.toString()
-        encoding.currentIndex = Math.max(0, ["utf-8", "cp1251", "utf-16"].indexOf(backend.encoding))
-    }
-    function openLanguageSettings() { navigation.page = 7; open() }
-    onOpened: reloadDocument()
-    Connections {
-        target: backend
-        function onDocumentReplaced() { if (dialog.visible) dialog.reloadDocument() }
-    }
+    function openLanguageSettings() { navigation.page = 6; open() }
     RowLayout {
         anchors.fill: parent
         spacing: 24
@@ -117,7 +107,7 @@ NativeDialog {
             spacing: 14
             Label { text: dialog.pages[navigation.page].title; font.pixelSize: 25; font.weight: Font.DemiBold; color: dialog.colors.text }
             Label {
-                text: ["Подберите палитру для комфортной работы.", "Настройте читаемость и плотность рабочего окна.", "Больше места для видео, звука и точных границ реплик.", "Расположите оригинал, перевод и словарь по своему вкусу.", "Общие значения для новых документов и параметры импорта.", "Изменения этого раздела относятся к открытому документу.", "Сочетания работают и в русской, и в английской раскладке.", "Настройте помощь при выделении текста и подключите нужный сервис."][navigation.page]
+                text: ["Подберите палитру для комфортной работы.", "Настройте читаемость и плотность рабочего окна.", "Больше места для видео, звука и точных границ реплик.", "Расположите оригинал, перевод и словарь по своему вкусу.", "Общие значения для новых документов и параметры импорта.", "Сочетания работают и в русской, и в английской раскладке.", "Настройте помощь при выделении текста и подключите нужный сервис."][navigation.page]
                 color: dialog.colors.muted; wrapMode: Text.Wrap; Layout.fillWidth: true; font.pixelSize: 12
             }
             StackLayout {
@@ -258,18 +248,18 @@ NativeDialog {
                     ColumnLayout {
                         width: checksScroll.availableWidth; spacing: 18
                         DialogSection {
-                            title: backend.isProject ? "Проверка текущего проекта" : "Проверка субтитров"; Layout.fillWidth: true
+                            title: "Проверки новых документов"; Layout.fillWidth: true
                             ColumnLayout {
-                                anchors.fill: parent; spacing: 12
-                                RowLayout {
-                                    Label { text: "Скорость чтения, зн/с"; Layout.fillWidth: true }
-                                    DialogSpinBox { objectName: "readingSpeedLimit"; from: 1; to: 100; value: backend.cpsLimit; editable: true; onValueModified: backend.preference("cpsLimit", value.toString()) }
+                                anchors.fill: parent
+                                spacing: 12
+                                ReviewSettingsForm {
+                                    Layout.fillWidth: true
+                                    namePrefix: "default"
+                                    values: backend.defaultReviewSettings
+                                    onEdited: (key, value) => backend.setDefaultReviewSetting(key, value)
                                 }
-                                RowLayout {
-                                    Label { text: "Знаков в строке"; Layout.fillWidth: true }
-                                    DialogSpinBox { objectName: "lineLengthLimit"; from: 10; to: 200; value: backend.lineLimit; editable: true; onValueModified: backend.preference("lineLimit", value.toString()) }
-                                }
-                                Label { text: backend.isProject ? "Сейчас изменяются проверки открытого .substance проекта. Их можно отменить через «Правка → Отменить»." : "Общие пороги проверок для документов без собственных настроек."; Layout.fillWidth: true; wrapMode: Text.Wrap; color: dialog.colors.muted; font.pixelSize: 11 }
+                                Label { text: "Эти значения получают новые документы и впервые открытые субтитры без собственных настроек. Параметры уже открытого документа не меняются."; Layout.fillWidth: true; wrapMode: Text.Wrap; color: dialog.colors.muted }
+                                Label { text: "Параметры текущего документа находятся в меню «Файл → Настройки документа…»."; Layout.fillWidth: true; wrapMode: Text.Wrap; color: dialog.colors.muted }
                             }
                         }
                         DialogSection {
@@ -284,99 +274,6 @@ NativeDialog {
                                     onActivated: backend.preference("importEncoding", ["auto", "utf-8", "cp1251", "shift_jis", "cp1252"][currentIndex])
                                 }
                             }
-                        }
-                    }
-                }
-                ScrollView {
-                    id: documentScroll
-                    clip: true
-                    contentWidth: availableWidth
-                    ColumnLayout {
-                        width: documentScroll.availableWidth
-                        spacing: 18
-                        DialogSection {
-                            title: "Параметры документа"
-                            Layout.fillWidth: true
-                            ColumnLayout {
-                                anchors.fill: parent
-                                RowLayout {
-                                    Layout.fillWidth: true
-                                    Label {
-                                        text: "Частота кадров"
-                                        Layout.preferredWidth: 160
-                                    }
-                                    DialogTextField {
-                                        id: fps
-                                        text: backend.fps.toString()
-                                        validator: DoubleValidator {
-                                            bottom: 1
-                                            top: 120
-                                            locale: "en_US"
-                                        }
-                                    }
-                                }
-                                RowLayout {
-                                    Layout.fillWidth: true
-                                    Label {
-                                        text: "Кодировка ASS"
-                                        Layout.preferredWidth: 160
-                                    }
-                                    ComboBox {
-                                        id: encoding
-                                        model: ["UTF-8", "Windows-1251", "UTF-16"]
-                                        currentIndex: Math.max(0, ["utf-8", "cp1251", "utf-16"].indexOf(backend.encoding))
-                                    }
-                                }
-                                Button {
-                                    text: "Применить к документу"
-                                    onClicked: backend.documentSettings(Number(fps.text), ["utf-8", "cp1251", "utf-16"][encoding.currentIndex])
-                                }
-                            }
-                        }
-                        DialogSection {
-                            title: "Проверки проекта"
-                            Layout.fillWidth: true
-                            ColumnLayout {
-                                anchors.fill: parent
-                                Label {
-                                    visible: !backend.isProject
-                                    text: "Сохраните .substance для отдельных настроек проверок."
-                                    color: dialog.colors.muted
-                                    Layout.fillWidth: true
-                                    wrapMode: Text.Wrap
-                                }
-                                CheckBox {
-                                    objectName: "showLengthWarnings"
-                                    text: "Превышение длины строки"
-                                    enabled: backend.isProject
-                                    checked: backend.reviewSettings.lineLength
-                                    onClicked: backend.setReviewSetting("lineLength", checked)
-                                }
-                                CheckBox {
-                                    text: "Превышение скорости чтения"
-                                    enabled: backend.isProject
-                                    checked: backend.reviewSettings.readingSpeed
-                                    onClicked: backend.setReviewSetting("readingSpeed", checked)
-                                }
-                                CheckBox {
-                                    text: "Превышение количества строк"
-                                    enabled: backend.isProject
-                                    checked: backend.reviewSettings.lineCount
-                                    onClicked: backend.setReviewSetting("lineCount", checked)
-                                }
-                            }
-                        }
-                        Label {
-                            text: "Точное время хранится в миллисекундах. ASS экспортируется с округлением до сотых секунды. Исходные стили и теги сохраняются."
-                            wrapMode: Text.Wrap
-                            Layout.fillWidth: true
-                            color: dialog.colors.muted
-                        }
-                        Label {
-                            text: "Файл .ass.substance рядом с ASS сохраняет оригинал, перевод и связи исходных строк. Для переноса всего проекта можно сохранить .substance."
-                            wrapMode: Text.Wrap
-                            Layout.fillWidth: true
-                            color: dialog.colors.muted
                         }
                     }
                 }

@@ -186,9 +186,9 @@ class Document:
 
     def to_dict(self, *, project_data=True) -> dict:
         result = deepcopy(self.extras)
-        result.update({"format": "substance", "schema_version": SCHEMA_VERSION, "app_version": __version__, "cues": [asdict(c) for c in self.cues], "skeleton": self.skeleton, "newline": self.newline, "trailing_newline": self.trailing_newline, "encoding": self.encoding, "bom": self.bom, "source_lines": deepcopy(self.source_lines), "metadata": deepcopy(self.metadata), "media": deepcopy(self.media), "fps": self.fps, "warnings": list(self.warnings)})
+        result.update({"format": "substance", "schema_version": SCHEMA_VERSION, "app_version": __version__, "cues": [asdict(c) for c in self.cues], "skeleton": self.skeleton, "newline": self.newline, "trailing_newline": self.trailing_newline, "encoding": self.encoding, "bom": self.bom, "source_lines": deepcopy(self.source_lines), "metadata": deepcopy(self.metadata), "media": deepcopy(self.media), "fps": self.fps, "warnings": list(self.warnings), "review_settings": deepcopy(self.review_settings)})
         if project_data:
-            result.update(reviews=[asdict(r) for r in self.reviews], characters=[asdict(c) for c in self.characters], images=dict(self.images), review_settings=deepcopy(self.review_settings))
+            result.update(reviews=[asdict(r) for r in self.reviews], characters=[asdict(c) for c in self.characters], images=dict(self.images))
         else:
             for cue in result['cues']:
                 cue['character_id'] = ''

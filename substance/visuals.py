@@ -220,6 +220,7 @@ class Waveform(QQuickPaintedItem):
         self._wave_gain, self._spectral_contrast = 1.0, 1.0
         self._drag = ""
         self._anchor = 0
+        self._scroll_remainder = 0.0
         self._neighbors = []
         self._snap_cuts, self._snap_frames, self._snap_cues = True, True, True
         self._palette_colors = {}
@@ -308,7 +309,6 @@ class Waveform(QQuickPaintedItem):
     dark = scalar("dark", bool, changed)
     spectral = scalar("spectral", bool, changed)
     snap = scalar("snap", bool, changed)
-    span = scalar("span", int, changed)
     showCueRange = scalar("show_cue_range", bool, changed)
     snapCuts = scalar("snap_cuts", bool, changed)
     snapFrames = scalar("snap_frames", bool, changed)
@@ -348,6 +348,14 @@ class Waveform(QQuickPaintedItem):
     def viewStart(self):
         return self._view
 
+    @Property(int, notify=viewChanged)
+    def span(self):
+        return self._span
+
+    @span.setter
+    def span(self, value):
+        self.setViewport(self._view, value)
+
     def get_neighbors(self):
         return self._neighbors
 
@@ -381,13 +389,12 @@ class Waveform(QQuickPaintedItem):
 
     @Slot(int)
     def scrollTime(self, delta):
-        self._view = max(0, self._view + delta)
-        self.viewChanged.emit()
-        self.update()
+        self.setViewport(self._view + delta, self._span)
 
     @Slot(int, int)
     def setViewport(self, start, span):
-        start, span = max(0, start), max(1000, min(300000, span))
+        start, span = max(0, round(start)), max(1000, min(300000, round(span)))
+        self._scroll_remainder = 0.0
         if (self._view, self._span) != (start, span):
             self._view, self._span = start, span
             self.viewChanged.emit()
@@ -395,17 +402,39 @@ class Waveform(QQuickPaintedItem):
 
     @Slot()
     def center(self):
-        self._view = max(0, round((self._start + self._end - self._span) / 2))
-        self.viewChanged.emit()
-        self.update()
+        self.setViewport((self._start + self._end - self._span) / 2, self._span)
 
     @Slot(float)
     def zoom(self, factor):
-        middle = self._view + self._span / 2
-        self._span = int(max(1000, min(300000, self._span * factor)))
-        self._view = max(0, int(middle - self._span / 2))
-        self.viewChanged.emit()
-        self.update()
+        self.zoomAt(factor, self.width() / 2)
+
+    @Slot(float, float)
+    def zoomAt(self, factor, x):
+        """Keep the unsnapped time under the pointer fixed, except at time zero."""
+        if not math.isfinite(factor) or factor <= 0 or not math.isfinite(x):
+            return
+        fraction = max(0.0, min(1.0, x / max(1, self.width())))
+        span = round(max(1000, min(300000, self._span * factor)))
+        self.setViewport(self._view + (self._span - span) * fraction, span)
+
+    @Slot(float, float, float, float, int, float)
+    def navigateWheel(self, pixel_x, pixel_y, angle_x, angle_y, modifiers, x):
+        """Share high resolution navigation between the waveform and track overlay."""
+        pixels = pixel_x != 0 or pixel_y != 0
+        dx, dy = (pixel_x, pixel_y) if pixels else (angle_x, angle_y)
+        delta = dx if abs(dx) > abs(dy) else dy
+        if not delta:
+            return  # ScrollBegin/ScrollEnd have no displacement.
+        zoom_modifiers = Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.MetaModifier
+        if modifiers & zoom_modifiers.value:
+            exponent = max(-20, min(20, -delta / 200 if pixels else math.log(0.8) * delta / 120))
+            self.zoomAt(math.exp(exponent), x)
+        else:
+            # Qt already applies the OS natural-scrolling preference to deltas.
+            delta_ms = -delta * self._span / (max(1, self.width()) if pixels else 960)
+            precise = max(0, self._view + self._scroll_remainder + delta_ms)
+            self.setViewport(precise, self._span)
+            self._scroll_remainder = precise - self._view
 
     def paint(self, painter: QPainter):
         w, h = round(self.width()), round(self.height())
@@ -514,9 +543,8 @@ class Waveform(QQuickPaintedItem):
             self.seekRequested.emit(ms)
         elif self._drag == "pan":
             x = int(event.position().x())
-            self._view = max(0, self._view - round((x - self._anchor) * self._span / max(1, self.width())))
+            self.setViewport(self._view - (x - self._anchor) * self._span / max(1, self.width()), self._span)
             self._anchor = x
-            self.viewChanged.emit()
         self.update()
 
     def mouseReleaseEvent(self, event):
@@ -526,10 +554,6 @@ class Waveform(QQuickPaintedItem):
         event.accept()
 
     def wheelEvent(self, event):
-        if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
-            self.zoom(0.8 if event.angleDelta().y() > 0 else 1.25)
-        else:
-            self._view = max(0, self._view - round(event.angleDelta().y() / 120 * self._span / 8))
-            self.viewChanged.emit()
-            self.update()
+        pixel, angle = event.pixelDelta(), event.angleDelta()
+        self.navigateWheel(pixel.x(), pixel.y(), angle.x(), angle.y(), event.modifiers().value, event.position().x())
         event.accept()

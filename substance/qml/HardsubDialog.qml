@@ -249,7 +249,7 @@ NativeDialog {
                             Label { text: "—" }
                             TextField { id: resultEnd; objectName: "hardsubResultEnd"; Accessible.name: "Конец найденного фрагмента" }
                             Button { text: "Сохранить правку"; onClicked: dialog.saveRow() }
-                            Button { text: "Показать в видео"; onClicked: { ocr.seek(results.currentIndex); dialog.close() } }
+                            Button { text: "Показать в видео"; onClicked: { ocr.seek(results.currentIndex); dialog.dismiss() } }
                         }
                     }
                 }
@@ -262,7 +262,7 @@ NativeDialog {
         Label { objectName: "hardsubStatus"; text: ocr.status; color: ocr.error ? dialog.colors.warning : dialog.colors.muted; Layout.fillWidth: true; wrapMode: Text.Wrap; maximumLineCount: 3; elide: Text.ElideRight }
         RowLayout {
             Layout.alignment: Qt.AlignRight
-            Button { text: "Закрыть"; onClicked: dialog.close() }
+            Button { text: "Закрыть"; onClicked: dialog.dismiss() }
             Button { text: "Остановить"; visible: ocr.busy; onClicked: ocr.stop() }
             Button {
                 objectName: "hardsubAnalyzeButton"

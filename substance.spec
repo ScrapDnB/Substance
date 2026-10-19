@@ -2,7 +2,7 @@ from pathlib import Path
 import os
 import sys
 import shutil
-from PyInstaller.utils.hooks import collect_data_files
+from PyInstaller.utils.hooks import collect_data_files, collect_submodules
 
 root = Path(SPECPATH)
 
@@ -86,7 +86,7 @@ if sys.platform == "win32":
             pe.close()
 
 a = Analysis([str(root / "run.py")], pathex=[str(root)], binaries=binaries, datas=datas,
-    hiddenimports=(["Vision", "Quartz", "CoreML"] if sys.platform == "darwin" else []) + ["paramiko", "cv2", "onnxruntime", "PIL.Image", "filelock", "PySide6.QtSvg", "substance.visuals", "spellchecker", "dubbing_online_client.api", "dubbing_online_client.documents", "dubbing_online_client.repository", "dubbing_online_client.credentials", "keyring.backends.macOS" if sys.platform == "darwin" else "keyring.backends.Windows"],
+    hiddenimports=(["Vision", "Quartz", "CoreML"] if sys.platform == "darwin" else []) + collect_submodules("av") + ["paramiko", "cv2", "onnxruntime", "PIL.Image", "filelock", "PySide6.QtSvg", "substance.visuals", "spellchecker", "dubbing_online_client.api", "dubbing_online_client.documents", "dubbing_online_client.repository", "dubbing_online_client.credentials", "keyring.backends.macOS" if sys.platform == "darwin" else "keyring.backends.Windows"],
     excludes=["tkinter", "_tkinter", "PySide6.QtWebEngineCore", "PySide6.QtWebEngineQuick", "PySide6.QtWebEngineWidgets", "PySide6.QtCharts", "PySide6.QtDataVisualization", "PySide6.Qt3DCore", "PySide6.Qt3DExtras", "PySide6.QtDesigner"],
     noarchive=False)
 if portable_media:
@@ -103,7 +103,7 @@ coll = COLLECT(exe, a.binaries, a.datas, strip=False, upx=False, name="Substance
 if sys.platform == "darwin":
     app = BUNDLE(coll, name="Substance.app", icon=icon, bundle_identifier="dev.scrapdnb.substance",
         info_plist={
-            "CFBundleShortVersionString": "0.9.0", "CFBundleVersion": "0.9.0b1", "SubstanceVersion": "v0.9.0-beta.1",
+            "CFBundleShortVersionString": "0.9.1", "CFBundleVersion": "0.9.1b2", "SubstanceVersion": "v0.9.1-beta.2",
             "NSHighResolutionCapable": True, "LSMinimumSystemVersion": "15.0", "NSHumanReadableCopyright": "Substance · ScrapDnB",
             "CFBundleDocumentTypes": [
                 {"CFBundleTypeName": "ASS Subtitle", "CFBundleTypeExtensions": ["ass", "ssa", "srt", "vtt"], "CFBundleTypeRole": "Editor", "LSHandlerRank": "Alternate"},

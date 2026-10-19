@@ -15,7 +15,7 @@ provenance = ['Built with Python ' + sys.version, 'Platform: ' + sys.platform]
 python_license = Path(sys.base_prefix) / f'lib/python{sys.version_info.major}.{sys.version_info.minor}/LICENSE.txt'
 if python_license.is_file():
     shutil.copyfile(python_license, target / 'Python-LICENSE.txt')
-for name in ('dubbing-online-client', 'PySide6', 'PySide6-Essentials', 'PySide6-Addons', 'shiboken6', 'numpy', 'opencv-python-headless', 'onnxruntime', 'pillow', 'filelock', 'protobuf', 'flatbuffers', 'imageio-ffmpeg', 'pyspellchecker', 'pyinstaller', 'pyobjc-core', 'pyobjc-framework-Cocoa', 'pyobjc-framework-Vision', 'pyobjc-framework-Quartz', 'pyobjc-framework-CoreML', 'keyring', 'certifi', 'paramiko', 'cryptography', 'bcrypt', 'pynacl', 'cffi', 'pycparser', 'invoke', 'jaraco.classes', 'jaraco.functools', 'jaraco.context', 'more-itertools', 'backports.tarfile'):
+for name in ('dubbing-online-client', 'PySide6', 'PySide6-Essentials', 'PySide6-Addons', 'PySide6-WebEngine', 'PySide6-Pdf', 'shiboken6', 'numpy', 'av', 'opencv-python-headless', 'onnxruntime', 'pillow', 'filelock', 'protobuf', 'flatbuffers', 'imageio-ffmpeg', 'pyspellchecker', 'pyinstaller', 'pyobjc-core', 'pyobjc-framework-Cocoa', 'pyobjc-framework-Vision', 'pyobjc-framework-Quartz', 'pyobjc-framework-CoreML', 'keyring', 'certifi', 'paramiko', 'cryptography', 'bcrypt', 'pynacl', 'cffi', 'pycparser', 'invoke', 'jaraco.classes', 'jaraco.functools', 'jaraco.context', 'more-itertools', 'backports.tarfile'):
     try:
         package = distribution(name)
     except PackageNotFoundError:

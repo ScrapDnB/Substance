@@ -196,7 +196,13 @@ def plan(document, indices, kind, options, translation=False):
             if result != cue:
                 proposals.append(Proposal([cue.id], [result], '; '.join(reasons)))
             # Findings with no universally correct automatic repair.
-            messages = quality(result, cps_limit=float(options.get('cps', 20)), line_limit=width,
+            messages = quality(result, cps_limit=float(options.get('cps', 20)),
+                               line_limit=max(10, min(200, int(options.get('width', 42)))),
+                               show_speed=options.get('readingSpeed', document.review_settings.get('readingSpeed', True)),
+                               show_length=options.get('lineLength', document.review_settings.get('lineLength', True)),
+                               show_lines=options.get('lineCount', document.review_settings.get('lineCount', True)),
+                               show_overlaps=options.get('overlaps', document.review_settings.get('overlaps', True)),
+                               line_count_limit=options.get('lineCountLimit', document.review_settings.get('lineCountLimit', 2)),
                                next_cue=document.cues[i + 1] if i + 1 < len(document.cues) else None)['messages']
             if result.end - result.start > maximum:
                 messages.append('Слишком длинная длительность')

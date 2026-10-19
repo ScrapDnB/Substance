@@ -37,6 +37,21 @@ def main():
         expected_version = runpy.run_path(str(root / "substance/__init__.py"))["__version__"]
         if report.get("version") != expected_version:
             raise RuntimeError(f"Unexpected packaged version: {report.get('version')}; expected {expected_version}")
+        from PySide6.QtCore import qVersion
+        if report.get('qtVersion') != qVersion() or report.get('qmlPreview') is not False:
+            raise RuntimeError(f'Unexpected Qt runtime or preview mode in the release package: {report}')
+        preview = subprocess.run([str(executable), '--qml-preview'], cwd=temporary, env=environment,
+                                 capture_output=True, text=True, timeout=30)
+        if preview.returncode != 2 or (sys.platform != 'win32' and 'only when running from source' not in preview.stderr):
+            raise RuntimeError('The release package did not reject the development-only QML preview mode')
+        # Exercise PyAV and its native libraries in the frozen worker, including
+        # redirected output from the Windows executable without a console.
+        bitmap = subprocess.run(
+            [str(executable), '--decode-bitmaps', str(root / 'tests/fixtures/bitmap.sup'), '0'],
+            cwd=temporary, env=environment, capture_output=True, timeout=30, check=True)
+        rows = [json.loads(line) for line in bitmap.stdout.splitlines()]
+        if len(rows) != 1 or (rows[0]['start'], rows[0]['end']) != (1000, 3000) or not rows[0]['image']:
+            raise RuntimeError('Packaged PGS decoder did not preserve the subtitle image and interval')
         expected_style = "macOS" if sys.platform == "darwin" else "FluentWinUI3"
         if report["style"] != expected_style or report["platform"] != sys.platform:
             raise RuntimeError(f"Unexpected packaged platform or style: {report}")

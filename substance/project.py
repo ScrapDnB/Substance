@@ -103,7 +103,7 @@ def validate_project(doc):
             raise ValueError('Некорректная связь замечания')
         if not all(isinstance(v, str) for v in (entry.text, entry.base, entry.replacement, entry.context, entry.created, entry.updated)):
             raise ValueError('Некорректный текст замечания')
-    if any(k in doc.review_settings and not isinstance(doc.review_settings[k], bool) for k in ('lineLength', 'readingSpeed', 'lineCount')):
+    if any(k in doc.review_settings and not isinstance(doc.review_settings[k], bool) for k in ('lineLength', 'readingSpeed', 'lineCount', 'overlaps')):
         raise ValueError('Некорректные настройки проверок')
     for key in ('cpsLimit', 'lineLimit', 'lineCountLimit'):
         if key in doc.review_settings and (type(doc.review_settings[key]) is not int or not 1 <= doc.review_settings[key] <= 1000):

@@ -51,7 +51,7 @@ NativeDialog {
                     Label { text: "Реплика удалена. Запись сохранена в архиве.\n" + modelData.context.replace(/\\N/g, "\n"); visible: modelData.archived; textFormat: Text.PlainText; color: dialog.colors.muted; wrapMode: Text.Wrap; Layout.fillWidth: true }
                     RowLayout {
                         Layout.fillWidth: true
-                        Button { text: "К реплике"; visible: !modelData.archived; onClicked: { backend.selectCueId(modelData.cue_ids[0]); dialog.close() } }
+                        Button { text: "К реплике"; visible: !modelData.archived; onClicked: { backend.selectCueId(modelData.cue_ids[0]); dialog.dismiss() } }
                         Button { text: "Изменить"; visible: modelData.kind === "note"; onClicked: dialog.editRequested(modelData) }
                         Button { text: modelData.state === "open" ? "Решено" : "Открыть снова"; visible: modelData.kind === "note"; onClicked: backend.reviewAction(modelData.id, modelData.state === "open" ? "resolved" : "open") }
                         Button { text: "Применить"; highlighted: true; visible: modelData.kind === "proposal" && modelData.state === "open"; enabled: !modelData.stale; onClicked: backend.reviewAction(modelData.id, "apply") }

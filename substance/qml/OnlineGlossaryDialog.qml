@@ -141,7 +141,7 @@ NativeDialog {
             Label { visible: !!dialog.form.data && dialog.form.data.status === "approved" && !dialog.session.canApprove; text: "Правки утверждённой карточки будут отправлены предложением редактору."; wrapMode: Text.Wrap; Layout.fillWidth: true }
             RowLayout {
                 Layout.alignment: Qt.AlignRight
-                Button { text: "Закрыть"; onClicked: dialog.close() }
+                Button { text: "Закрыть"; onClicked: dialog.dismiss() }
                 Button { text: "Удалить черновик"; visible: !!dialog.form.data; enabled: !backend.onlineSession.busy; onClicked: { if (dialog.session.discardDraft()) dialog.loadDraft() } }
                 Button { objectName: "glossarySend"; text: "Отправить"; highlighted: true; visible: !!dialog.form.data; enabled: dialog.session.canEdit && !dialog.session.pending && !dialog.session.stale && !backend.onlineSession.busy && !!dialog.form.data && !!dialog.form.data.name.trim(); onClicked: { if (dialog.session.send()) dialog.loadDraft() } }
             }

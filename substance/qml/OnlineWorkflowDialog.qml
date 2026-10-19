@@ -10,7 +10,7 @@ NativeDialog {
     preferredWidth: 560
     preferredHeight: 340
     function beginAction(value) { action = value; reason.text = ""; open() }
-    Connections { target: backend.onlineSession; function onWorkflowCompleted(value) { if (dialog.visible && dialog.action === value) dialog.close() } }
+    Connections { target: backend.onlineSession; function onWorkflowCompleted(value) { if (dialog.presented && dialog.action === value) dialog.dismiss() } }
     ColumnLayout {
         anchors.fill: parent
         spacing: 12
@@ -22,7 +22,7 @@ NativeDialog {
         }
         RowLayout {
             Layout.alignment: Qt.AlignRight
-            Button { text: "Отмена"; onClicked: dialog.close() }
+            Button { text: "Отмена"; onClicked: dialog.dismiss() }
             Button { objectName: "onlineWorkflowSubmit"; text: "Подтвердить"; highlighted: true; enabled: reason.text.trim().length > 0 && !backend.onlineSession.busy && !backend.onlineSession.pending && !backend.onlineSession.reviewSession.pending; onClicked: { backend.onlineSession.workflow(dialog.action, reason.text) } }
         }
     }

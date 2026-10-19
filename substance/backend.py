@@ -1,13 +1,12 @@
 """Qt bridge: document commands, selection, persistence and platform dialogs."""
 from __future__ import annotations
-from copy import deepcopy
+from copy import copy
 from dataclasses import asdict
 from pathlib import Path
 import json
 import os
 import re
 import sys
-import math
 
 from PySide6.QtCore import QAbstractListModel, QModelIndex, QObject, Property, QRunnable, QSettings, QStandardPaths, QThreadPool, QTimer, Qt, Signal, Slot, QMimeData, QUrl
 from PySide6.QtGui import QGuiApplication, QKeySequence
@@ -70,6 +69,7 @@ class CueModel(QAbstractListModel):
         self.backend = backend
         self.visible: list[int] = []
         self.cache = []
+        self._row_keys = []
         self.roles = {Qt.ItemDataRole.UserRole + i + 1: name.encode() for i, name in enumerate(self.ROLE_NAMES)}
 
     def roleNames(self):
@@ -85,9 +85,12 @@ class CueModel(QAbstractListModel):
         return self.cache[index.row()].get(name)
 
     def rebuild(self, incremental=False):
-        visible, cache = [], []
+        visible, cache, row_keys = [], [], []
         backend = self.backend
         doc = backend.editor.document
+        if doc.cues:
+            backend._compute()
+        old_rows = {source: (key, row) for source, key, row in zip(self.visible, self._row_keys, self.cache)}
         portraits = {
             card.id: 'image://project/' + portrait['image']
             for card in doc.characters
@@ -95,14 +98,24 @@ class CueModel(QAbstractListModel):
             if portrait['id'] == card.primary and portrait['image'] in doc.images
         }
         for i, cue in enumerate(doc.cues):
-            info = backend.cue_quality(i)
+            info = backend._quality_cache[i]
             if not backend.matches(cue, info):
                 continue
             visible.append(i)
-            cache.append({"sourceIndex": i, "number": i + 1, "startTime": format_time(cue.start), "endTime": format_time(cue.end), "character": cue.character, "cueText": plain_text(cue.output_text).replace("\n", "  ↵  "), "originalText": plain_text(cue.original).replace("\n", "  ↵  "), "translatedText": plain_text(cue.translation or "").replace("\n", "  ↵  "), "noteCount": backend.review_count(cue.id, "note"), "proposalCount": backend.review_count(cue.id, "proposal"), "cps": info["cps"], "warning": info["warning"], "issues": "\n".join(info["messages"]), "selected": i in backend.selection, "comment": cue.comment})
-            cache[-1]['portraitUrl'] = portraits.get(cue.character_id, '')
+            notes = backend._review_counts.get((cue.id, 'note'), 0)
+            proposals = backend._review_counts.get((cue.id, 'proposal'), 0)
+            portrait = portraits.get(cue.character_id, '')
+            selected = i in backend.selection
+            key = (cue.start, cue.end, cue.character, cue.output_text, cue.original, cue.translation,
+                   notes, proposals, info['cps'], info['warning'], tuple(info['messages']), selected, cue.comment, portrait)
+            row_keys.append(key)
+            old_key, old_row = old_rows.get(i, (None, None))
+            if key == old_key and old_row['selected'] == selected:
+                cache.append(old_row)
+                continue
+            cache.append({"sourceIndex": i, "number": i + 1, "startTime": format_time(cue.start), "endTime": format_time(cue.end), "character": cue.character, "cueText": plain_text(cue.output_text).replace("\n", "  ↵  "), "originalText": plain_text(cue.original).replace("\n", "  ↵  "), "translatedText": plain_text(cue.translation or "").replace("\n", "  ↵  "), "noteCount": notes, "proposalCount": proposals, "cps": info["cps"], "warning": info["warning"], "issues": "\n".join(info["messages"]), "selected": selected, "comment": cue.comment, "portraitUrl": portrait})
         old_count = len(self.visible)
-        if incremental and visible[:old_count] == self.visible:
+        if visible == self.visible or (incremental and visible[:old_count] == self.visible):
             if len(visible) > old_count:
                 self.beginInsertRows(QModelIndex(), old_count, len(visible) - 1)
                 self.visible.extend(visible[old_count:])
@@ -116,6 +129,7 @@ class CueModel(QAbstractListModel):
             self.beginResetModel()
             self.visible, self.cache = visible, cache
             self.endResetModel()
+        self._row_keys = row_keys
 
     def update_selection(self):
         role = next(k for k, v in self.roles.items() if v == b"selected")
@@ -183,6 +197,7 @@ class Backend(QObject):
         self._capture_serial = 0
         self._capture_request = None
         self._mode = "timing"
+        self._section = "timing"
         self._current = -1
         self.selection: set[int] = set()
         self._anchor = -1
@@ -204,6 +219,11 @@ class Backend(QObject):
         self._encoding = self.settings.value("importEncoding", "auto")
         self._cps_limit = self.settings.value("cpsLimit", 20, type=int)
         self._line_limit = self.settings.value("lineLimit", 42, type=int)
+        self._review_defaults = {name: self.settings.value('reviewChecks/' + name, True, type=bool)
+                                 for name in ('lineLength', 'readingSpeed', 'lineCount', 'overlaps')}
+        self._line_count_limit = self.settings.value('lineCountLimit', 2, type=int)
+        self._document_defaults = self.defaultReviewSettings
+        self.editor.document.review_settings = dict(self._document_defaults)
         default_shortcuts = {**SHORTCUTS, **({"redo": "Ctrl+Y"} if sys.platform == "win32" else {"play": "Ctrl+Shift+Space"} if sys.platform == "darwin" else {})}
         try:
             self._shortcuts = {**default_shortcuts, **json.loads(self.settings.value("shortcuts", "{}"))}
@@ -238,6 +258,49 @@ class Backend(QObject):
         self.hardsub = HardsubController(self)
         from .language_controller import LanguageController
         self.language_assistance = LanguageController(self)
+        from .workflow_controllers import TransferController, QualityProfiles
+        from .batch_processing import BatchController
+        from .frame_index import FrameController
+        from .alignment_models import AlignmentModels
+        from .bitmap_subtitles import BitmapController
+        self.transfer = TransferController(self)
+        self.quality_profiles = QualityProfiles(self)
+        self.batch_files = BatchController(self)
+        self.frames = FrameController(self)
+        self.alignment_models = AlignmentModels(self)
+        self.bitmap_subtitles = BitmapController(self)
+
+    @Property(QObject, constant=True)
+    def fileTransfer(self):
+        return self.transfer
+
+    @Property(QObject, constant=True)
+    def qualityProfiles(self):
+        return self.quality_profiles
+
+    @Property(QObject, constant=True)
+    def batchFiles(self):
+        return self.batch_files
+
+    @Property(QObject, constant=True)
+    def frameIndex(self):
+        return self.frames
+
+    @Property(QObject, constant=True)
+    def alignmentModels(self):
+        return self.alignment_models
+
+    @Property(QObject, constant=True)
+    def bitmapSubtitles(self):
+        return self.bitmap_subtitles
+
+    @Slot()
+    def openTimingProcessor(self):
+        self.tools.open('retime')
+
+    @Slot()
+    def openScriptTiming(self):
+        self.tools.open('forced')
 
     @Property(QObject, constant=True)
     def languageAssistance(self):
@@ -488,6 +551,21 @@ class Backend(QObject):
     def mode(self):
         return self._mode
 
+    SECTIONS = (("preparation", "Подготовка"), ("timing", "Тайминг"),
+                ("translation", "Перевод"), ("post", "Пост"))
+
+    @Property(str, notify=currentChanged)
+    def section(self):
+        return self._section
+
+    @Property('QStringList', constant=True)
+    def sectionKeys(self):
+        return [key for key, _ in self.SECTIONS]
+
+    @Property('QStringList', constant=True)
+    def sectionLabels(self):
+        return [label for _, label in self.SECTIONS]
+
     @Property(int, notify=changed)
     def count(self):
         return len(self.editor.document.cues)
@@ -532,6 +610,11 @@ class Backend(QObject):
     def counts(self):
         self._compute()
         return self._counts_cache
+
+    @Property(bool, notify=changed)
+    def hasDocumentRemarks(self):
+        self._compute()
+        return self._has_document_remarks
 
     @Property('QVariantList', notify=changed)
     def characters(self):
@@ -595,11 +678,36 @@ class Backend(QObject):
 
     @Property(int, notify=changed)
     def cpsLimit(self):
-        return self.editor.document.review_settings.get("cpsLimit", self._cps_limit) if self.isProject else self._cps_limit
+        return self.reviewSettings['cpsLimit']
 
     @Property(int, notify=changed)
     def lineLimit(self):
-        return self.editor.document.review_settings.get("lineLimit", self._line_limit) if self.isProject else self._line_limit
+        return self.reviewSettings['lineLimit']
+
+    @Property('QVariantMap', notify=preferencesChanged)
+    def defaultReviewSettings(self):
+        return dict(self._review_defaults, cpsLimit=self._cps_limit, lineLimit=self._line_limit,
+                    lineCountLimit=self._line_count_limit)
+
+    @Slot(str, 'QVariant')
+    def setDefaultReviewSetting(self, name, value):
+        if name in self._review_defaults:
+            if not isinstance(value, bool):
+                return
+            self._review_defaults[name] = value
+            self.settings.setValue('reviewChecks/' + name, value)
+        elif name in ('cpsLimit', 'lineLimit', 'lineCountLimit'):
+            try:
+                low, high = {'cpsLimit': (1, 100), 'lineLimit': (10, 200), 'lineCountLimit': (1, 10)}[name]
+                value = max(low, min(high, int(value)))
+            except (ValueError, TypeError, OverflowError):
+                return
+            setattr(self, {'cpsLimit': '_cps_limit', 'lineLimit': '_line_limit', 'lineCountLimit': '_line_count_limit'}[name], value)
+            self.settings.setValue(name, value)
+        else:
+            return
+        # Defaults affect future documents, never the current warnings or plan.
+        self.preferencesChanged.emit()
 
     @Property('QVariantMap', notify=preferencesChanged)
     def shortcuts(self):
@@ -646,6 +754,8 @@ class Backend(QObject):
     @Slot(int, str)
     def locateSpelling(self, index, word):
         if self.select(index, 0):
+            if self._section in ("preparation", "post"):
+                self.setMode(self._mode)
             self.highlightWord.emit(word)
 
     @Slot(str)
@@ -692,19 +802,27 @@ class Backend(QObject):
         self.notify(f"Извлечено реплик: {self.count}")
 
     def _compute(self):
-        key = (id(self.editor.document), self.editor.revision, self.cpsLimit, self.lineLimit, self.isProject, tuple(sorted(self.editor.document.review_settings.items())))
+        settings = self.reviewSettings
+        cps_limit, line_limit, project = self.cpsLimit, self.lineLimit, self.isProject
+        key = (id(self.editor.document), self.editor.revision, cps_limit, line_limit, project, tuple(sorted(settings.items())))
         if key == self._computed_key:
             return
         cues = self.editor.document.cues
-        self._quality_cache = [quality(c, next_cue=cues[i + 1] if i + 1 < len(cues) else None, cps_limit=self.cpsLimit, line_limit=self.lineLimit, line_count_limit=self.reviewSettings["lineCountLimit"], show_length=self.reviewSettings["lineLength"], show_speed=self.reviewSettings["readingSpeed"], show_lines=self.reviewSettings["lineCount"]) for i, c in enumerate(cues)]
+        self._quality_cache = [quality(c, next_cue=cues[i + 1] if i + 1 < len(cues) else None, cps_limit=cps_limit, line_limit=line_limit, line_count_limit=settings["lineCountLimit"], show_length=settings["lineLength"], show_speed=settings["readingSpeed"], show_lines=settings["lineCount"], show_overlaps=settings["overlaps"]) for i, c in enumerate(cues)]
         self._review_counts = {}
+        self._has_document_remarks = False
+        cue_ids = {cue.id for cue in cues}
         if self.online.active:
             for entry in self.online.reviews.entries:
+                if entry['cue_id'] in cue_ids:
+                    self._has_document_remarks = True
                 if entry["state"] == "open":
                     review_key = (entry["cue_id"], entry["kind"])
                     self._review_counts[review_key] = self._review_counts.get(review_key, 0) + 1
-        elif self.isProject:
+        elif project:
             for entry in self.editor.document.reviews:
+                if any(cue_id in cue_ids for cue_id in entry.cue_ids):
+                    self._has_document_remarks = True
                 if entry.state == 'open':
                     for cue_id in entry.cue_ids:
                         review_key = (cue_id, entry.kind)
@@ -712,7 +830,7 @@ class Backend(QObject):
         self._counts_cache = {"all": len(cues), "warnings": sum(q["warning"] for q in self._quality_cache),
                               "notes": sum(self._review_counts.get((c.id, 'note'), 0) > 0 for c in cues),
                               "proposals": sum(self._review_counts.get((c.id, 'proposal'), 0) > 0 for c in cues),
-                              "characters": len(self.editor.document.characters) if self.isProject else 0}
+                              "characters": len(self.editor.document.characters) if project else 0}
         self._characters_cache = sorted({c.character for c in cues if c.character})
         self._computed_key = key
 
@@ -721,9 +839,9 @@ class Backend(QObject):
         return self._quality_cache[index]
 
     def matches(self, cue, info):
-        if self._filter == 'notes' and not self.review_count(cue.id, 'note'):
+        if self._filter == 'notes' and not self._review_counts.get((cue.id, 'note')):
             return False
-        if self._filter == 'proposals' and not self.review_count(cue.id, 'proposal'):
+        if self._filter == 'proposals' and not self._review_counts.get((cue.id, 'proposal')):
             return False
         if self._filter == "warnings" and not info["warning"]:
             return False
@@ -732,6 +850,8 @@ class Backend(QObject):
         return not self._pattern or self._pattern.search(cue.original + "\n" + cue.output_text) is not None
 
     def _refresh(self, current=True):
+        if self._filter == 'warnings' and not self.checksEnabled:
+            self._filter = 'all'
         self._current = min(self._current, self.count - 1)
         self.selection = {i for i in self.selection if i < self.count}
         self.model.rebuild()
@@ -813,13 +933,19 @@ class Backend(QObject):
     def _update_preview(self):
         doc = self.editor.document
         if self.draft and self._current >= 0:
-            doc = deepcopy(doc)
+            # ASS serialization only reads the document. Overlay the one edited
+            # cue without copying source history, portraits, or other cues.
+            doc = copy(doc)
+            doc.cues = list(doc.cues)
+            doc.cues[self._current] = copy(doc.cues[self._current])
             for key, value in self.draft.items():
                 if key not in ("start", "end"):
                     setattr(doc.cues[self._current], key, value)
-        self._preview = doc.ass_text(use_ass_styles=self._use_ass_styles)
-        self.previewChanged.emit()
-        self.playbackChanged.emit()
+        preview = doc.ass_text(use_ass_styles=self._use_ass_styles)
+        if preview != self._preview:
+            self._preview = preview
+            self.previewChanged.emit()
+            self.playbackChanged.emit()
 
     @Slot(int, int, result=bool)
     def select(self, index, modifiers=0):
@@ -863,10 +989,22 @@ class Backend(QObject):
 
     @Slot(str)
     def setMode(self, value):
-        if self.flush() and value in ("timing", "translation"):
+        if value in ("timing", "translation"):
+            self.setSection(value)
+
+    @Slot(str, result=bool)
+    def setSection(self, value):
+        if value not in self.sectionKeys or not self.flush():
+            return False
+        # Tool pages retain the last text-editing mode, including translation
+        # semantics, while all four sections share the same document and draft.
+        self._section = value
+        if value in ("timing", "translation"):
             self._mode = value
-            self.currentChanged.emit()
+        self.currentChanged.emit()
+        if value in ("timing", "translation"):
             self.focusEditor.emit()
+        return True
 
     @Slot(str)
     def setFilter(self, value):
@@ -875,6 +1013,8 @@ class Backend(QObject):
             return
         if value not in ('all', 'notes', 'proposals', 'warnings'):
             return
+        if value == 'warnings' and not self.checksEnabled:
+            value = 'all'
         if self.flush():
             self._filter = value
             self._refresh()
@@ -976,9 +1116,8 @@ class Backend(QObject):
     @Slot(int)
     def stepFrame(self, direction):
         position = self.media_controller.framePosition
-        frame = round(position * self.fps / 1000) + direction
         self.media_controller.player.pause()
-        self.media_controller.seek(math.ceil(max(0, frame) * 1000 / self.fps))
+        self.media_controller.seek(self.frames.step(position, direction))
 
     @Slot(bool)
     def playCurrent(self, loop=False):
@@ -1006,7 +1145,7 @@ class Backend(QObject):
         def command():
             selected_ids = {self.editor.document.cues[i].id for i in self._indices()}
             current_id = self.editor.document.cues[self._current].id if self._current >= 0 else ""
-            self.editor.batch(self._indices(all_lines), action, parsed)
+            self.editor.batch(self._indices(all_lines), action, parsed, frame_times=self.frames.times)
             if action == "sort":
                 self.selection = {i for i, c in enumerate(self.editor.document.cues) if c.id in selected_ids}
                 self._current = next((i for i, c in enumerate(self.editor.document.cues) if c.id == current_id), -1)
@@ -1114,7 +1253,7 @@ class Backend(QObject):
 
     @Slot(str, str)
     def preference(self, name, value):
-        if name in ('cpsLimit', 'lineLimit') and self.isProject:
+        if name in ('cpsLimit', 'lineLimit'):
             limit = max(1 if name == 'cpsLimit' else 10, min(100 if name == 'cpsLimit' else 200, int(value)))
             self._guard(lambda: self.editor.transact('Настройки проверок', lambda d: d.review_settings.update({name: limit})))
             return
@@ -1125,12 +1264,6 @@ class Backend(QObject):
         elif name == "motion":
             self._motion = value == "true" and not reduce_motion()
             value = self._motion
-        elif name == "cpsLimit":
-            self._cps_limit = max(1, min(100, int(value)))
-            value = self._cps_limit
-        elif name == "lineLimit":
-            self._line_limit = max(10, min(200, int(value)))
-            value = self._line_limit
         elif name == "importEncoding":
             self._encoding = value
         else:
@@ -1139,12 +1272,30 @@ class Backend(QObject):
         self.preferencesChanged.emit()
         self._refresh()
 
-    @Slot(float, str)
-    def documentSettings(self, fps, encoding):
+    @Slot(float, str, result=bool)
+    @Slot(float, str, 'QVariantMap', result=bool)
+    def documentSettings(self, fps, encoding, checks=None):
+        import math
+        if not math.isfinite(fps) or not 1 <= fps <= 120 or encoding not in ('utf-8', 'cp1251', 'utf-16'):
+            self.show_error('Укажите частоту кадров от 1 до 120 и поддерживаемую кодировку')
+            return False
+        values = dict(self.reviewSettings if checks is None else checks)
+        for key in self._review_defaults:
+            if not isinstance(values.get(key), bool):
+                self.show_error('Некорректные настройки проверок')
+                return False
+        for key, low, high in [('cpsLimit', 1, 100), ('lineLimit', 10, 200), ('lineCountLimit', 1, 10)]:
+            if type(values.get(key)) is not int or not low <= values[key] <= high:
+                self.show_error('Некорректный порог проверки')
+                return False
         def apply(doc):
-            doc.fps, doc.encoding, doc.bom = fps, encoding, False
-            doc.metadata["fps_source"] = "manual"
-        self._guard(lambda: self.editor.transact("Настройки документа", apply))
+            if doc.fps != fps:
+                doc.fps = fps
+                doc.metadata["fps_source"] = "manual"
+            if doc.encoding != encoding:
+                doc.encoding, doc.bom = encoding, False
+            doc.review_settings.update({key: values[key] for key in self.defaultReviewSettings})
+        return self._guard(lambda: self.editor.transact("Настройки документа", apply))
 
     def _confirm_unsaved(self):
         if self.speech.running:
@@ -1175,6 +1326,8 @@ class Backend(QObject):
             self.online.disconnect()
         self.documentReplaced.emit()
         self._card_draft = {}
+        self._document_defaults = self.defaultReviewSettings
+        document.review_settings = {**self._document_defaults, **document.review_settings}
         self.editor = Editor(document)
         self.path = path
         self.editor.project_mode = self.isProject
@@ -1218,8 +1371,7 @@ class Backend(QObject):
 
     def _loaded(self, doc, path):
         self._set_document(doc, path if Path(path).suffix.lower() in (".ass", ".substance") else "")
-        self._recents = [path] + [p for p in self._recents if p != path][:9]
-        self.settings.setValue("recents", json.dumps(self._recents))
+        self._remember_path(path)
         media_path = doc.media.get("path", "")
         if media_path and Path(media_path).is_file():
             self.media_controller.open(media_path)
@@ -1228,6 +1380,11 @@ class Backend(QObject):
         self.notify(f"Открыто реплик: {self.count}" + (f" · Предупреждений импорта: {len(doc.warnings)}" if doc.warnings else ""))
         if doc.warnings:
             QMessageBox.information(None, "Замечания импорта", "\n".join(doc.warnings[:12]))
+
+    def _remember_path(self, path):
+        path = str(path)
+        self._recents = [path] + [p for p in self._recents if p != path][:9]
+        self.settings.setValue("recents", json.dumps(self._recents))
 
     def _load_error(self, value):
         self._extract_task = None
@@ -1417,6 +1574,7 @@ class Backend(QObject):
         data["recovery_card_draft"] = self._card_draft
         data["recovery_current"] = self._current
         data["recovery_mode"] = self._mode
+        data["recovery_section"] = self._section
         try:
             atomic_write(self.recovery_path, json.dumps(data, ensure_ascii=False).encode("utf-8"))
         except OSError as exc:
@@ -1445,6 +1603,9 @@ class Backend(QObject):
                     self._mode = data.get("recovery_mode", "timing")
                     if self._mode not in ("timing", "translation"):
                         self._mode = "timing"
+                    self._section = data.get("recovery_section", self._mode)
+                    if self._section not in self.sectionKeys:
+                        self._section = self._mode
                     media_path = self.editor.document.media.get("path", "")
                     if media_path and Path(media_path).is_file():
                         self.media_controller.open(media_path)
@@ -1463,8 +1624,12 @@ class Backend(QObject):
 
     @Property('QVariantMap', notify=changed)
     def reviewSettings(self):
-        defaults = {'lineLength': True, 'readingSpeed': True, 'lineCount': True, 'lineCountLimit': 2}
-        return {**defaults, **self.editor.document.review_settings} if self.isProject else defaults
+        return {**self._document_defaults, **self.editor.document.review_settings}
+
+    @Property(bool, notify=changed)
+    def checksEnabled(self):
+        settings = self.reviewSettings
+        return any(settings[name] for name in self._review_defaults)
 
     def review_count(self, cue_id, kind):
         self._compute()
@@ -1549,6 +1714,7 @@ class Backend(QObject):
             self.editor.project_mode = self.isProject
             self.editor.mark_saved()
             self._remove_recovery()
+            self._remember_path(path)
             self._refresh()
             self.notify('Сохранено')
             return True
@@ -1574,8 +1740,9 @@ class Backend(QObject):
 
     @Slot(str, bool)
     def setReviewSetting(self, name, value):
-        if name in ('lineLength', 'readingSpeed', 'lineCount') and self.ensureProject():
-            self._guard(lambda: self.editor.transact('Настройки проверок', lambda d: d.review_settings.update({name: value})))
+        if name not in ('lineLength', 'readingSpeed', 'lineCount', 'overlaps'):
+            return
+        self._guard(lambda: self.editor.transact('Настройки проверок', lambda d: d.review_settings.update({name: value})))
 
     @Slot()
     def openReviews(self):
@@ -1636,6 +1803,8 @@ class Backend(QObject):
             self._filter, self._character_filter, self._search, self._pattern = 'all', '', '', None
             self._refresh()
             if self.select(index, 0):
+                if self._section in ("preparation", "post"):
+                    self.setMode(self._mode)
                 self.seekCurrent()
 
     @Slot(str, str, str, str, str, str, str, result=bool)
@@ -1803,6 +1972,11 @@ class Backend(QObject):
                 self.media_controller.seek(portrait['time'])
 
     def shutdown(self):
+        self.transfer.reset()
+        self.batch_files.shutdown()
+        self.frames.shutdown()
+        self.alignment_models.shutdown()
+        self.bitmap_subtitles.shutdown()
         self.language_assistance.shutdown()
         self.hardsub.shutdown()
         self.portraits.shutdown()

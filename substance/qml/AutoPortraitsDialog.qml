@@ -513,7 +513,7 @@ NativeDialog {
             }
             Button {
                 text: "Закрыть"
-                onClicked: dialog.close()
+                onClicked: dialog.dismiss()
             }
             Button {
                 objectName: "applyPortraitsButton"

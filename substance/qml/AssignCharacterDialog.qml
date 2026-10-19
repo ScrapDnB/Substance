@@ -17,7 +17,7 @@ NativeDialog {
         suggestionIndex = suggestions.length ? 0 : -1
     }
     function assign(name, create) {
-        if (backend.assignCharacterName(name, create)) dialog.close()
+        if (backend.assignCharacterName(name, create)) dialog.dismiss()
     }
     function submit() {
         if (!actorName.text.trim().length) return
@@ -105,7 +105,7 @@ NativeDialog {
         function confirmCreation() {
             if (backend.assignCharacterName(dialog.pendingName, true)) {
                 createDialog.close()
-                dialog.close()
+                dialog.dismiss()
             }
         }
         onOpened: createButton.forceActiveFocus()

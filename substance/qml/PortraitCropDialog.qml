@@ -157,14 +157,14 @@ NativeDialog {
             Layout.fillWidth: true
             CheckBox { id: primary; text: "Сделать основным портретом" }
             Item { Layout.fillWidth: true }
-            Button { text: "Отмена"; onClicked: dialog.close() }
+            Button { text: "Отмена"; onClicked: dialog.dismiss() }
             Button {
                 objectName: "savePortraitCrop"
                 text: "Сохранить портрет"; highlighted: true
                 enabled: (!backend.onlineSession.active || (backend.onlineSession.glossarySession.canEdit && !backend.onlineSession.busy && !backend.onlineSession.glossarySession.pending)) && dialog.cropW * backend.captureInfo.width >= 8 && dialog.cropH * backend.captureInfo.height >= 8 && (recipient.currentIndex > 0 || newName.text.trim().length > 0)
                 onClicked: {
                     let cardId = recipient.currentIndex > 0 ? backend.characterCards[recipient.currentIndex-1].id : ""
-                    if (backend.savePortrait(cardId, newName.text, dialog.cropX, dialog.cropY, dialog.cropW, dialog.cropH, primary.checked)) dialog.close()
+                    if (backend.savePortrait(cardId, newName.text, dialog.cropX, dialog.cropY, dialog.cropW, dialog.cropH, primary.checked)) dialog.dismiss()
                 }
             }
         }

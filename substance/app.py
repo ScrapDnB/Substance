@@ -6,7 +6,7 @@ from pathlib import Path
 import sys
 import json
 
-from PySide6.QtCore import QObject, QTimer, QUrl, Qt, QEvent, Signal
+from PySide6.QtCore import QObject, QTimer, QUrl, Qt, QEvent, Signal, qVersion
 from PySide6.QtGui import QIcon
 from PySide6.QtQml import QQmlApplicationEngine
 from PySide6.QtQuickControls2 import QQuickStyle
@@ -60,7 +60,18 @@ def main():
     parser.add_argument("--online-capabilities", action="store_true")
     parser.add_argument("--online-stdin", action="store_true")
     parser.add_argument("--online-resume", action="store_true")
+    parser.add_argument("--qml-preview", action="store_true", help="Enable QML live preview for source development")
+    parser.add_argument("-qmljsdebugger", dest="qml_debugger", help=argparse.SUPPRESS)
     args = parser.parse_args()
+    if args.qml_debugger and not args.qml_preview:
+        parser.error("-qmljsdebugger requires --qml-preview")
+    if args.qml_preview:
+        if getattr(sys, "frozen", False):
+            parser.error("QML preview is available only when running from source")
+        if tuple(map(int, qVersion().split(".")[:2])) < (6, 12):
+            parser.error("QML preview requires PySide6 / Qt 6.12 or newer")
+        from PySide6.QtQml import QQmlDebuggingEnabler
+        qml_debugging = QQmlDebuggingEnabler()  # Keep alive for the application lifetime.
     if args.online_capabilities:
         from .repositories import online_client
         online_client()
@@ -81,7 +92,10 @@ def main():
         for field in ("server_url", "project_id", "episode_id", "episode_name", "code"):
             if not isinstance(launch.get(field), str) or not launch[field]:
                 return 2
-    app = DesktopApplication([sys.argv[0]])
+    qt_arguments = [sys.argv[0]]
+    if args.qml_debugger:
+        qt_arguments.append("-qmljsdebugger=" + args.qml_debugger)
+    app = DesktopApplication(qt_arguments)
     app.setApplicationName("Substance")
     app.setOrganizationName("ScrapDnB")
     app.setApplicationVersion(__version__)
@@ -157,7 +171,8 @@ def main():
         from .media import ffmpeg_executable, ffprobe_executable
         from .visuals import libass_path
         from .transcription import whisper_executable, vad_model_path
-        report = {"version": __version__, "platform": sys.platform, "style": QQuickStyle.name(),
+        report = {"version": __version__, "qtVersion": qVersion(), "qmlPreview": args.qml_preview,
+                  "platform": sys.platform, "style": QQuickStyle.name(),
                   "applicationActive": app.applicationState() == Qt.ApplicationState.ApplicationActive, "windowActive": window.isActive(),
                   "ffmpeg": ffmpeg_executable(), "ffprobe": ffprobe_executable(), "whisper": whisper_executable(),
                   "speechVAD": str(vad_model_path() or ''),

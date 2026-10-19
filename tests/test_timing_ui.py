@@ -144,5 +144,82 @@ def test_edit_and_tools_menus_have_separate_commands(ui):
     edit = texts('editMenu')
     tools = texts('toolsMenu')
     assert 'Отменить' in edit and 'Найти…' in edit and 'Скопировать реплики' in edit
-    for title in ('Проверить и исправить…', 'Переносы и разбиение…', 'Найти и распознать хардсаб…', 'Автопортреты из видео…', 'Создать субтитры из аудио…', 'Уточнить по речи…'):
-        assert title in tools and title not in edit
+    groups = {
+        'qualityMenu': ('Проверить и исправить…', 'Проверить орфографию…'),
+        'cuesMenu': ('Переносы и разбиение…',),
+        'mediaMenu': ('Найти и распознать хардсаб…', 'Создать субтитры из аудио…'),
+        'timingMenu': ('Уточнить по речи…', 'Обработать интервалы…', 'Тайминг готового сценария…'),
+        'toolsMenu': ('Автопортреты из видео…', 'Персонажи проекта…'),
+    }
+    for menu, titles in groups.items():
+        for title in titles:
+            assert title in texts(menu) and title not in edit
+    assert 'Проверить и исправить…' not in tools
+
+
+def test_point_sync_explains_pending_time_and_guides_review(ui):
+    b, w = ui
+    b.openPointSync()
+    d = w.findChild(QObject, 'shiftDialog')
+    QTest.qWait(40)
+    assert 'правильным временем' in d.findChild(QObject, 'timingIntroduction').property('text')
+    assert 'Одна точка' in d.findChild(QObject, 'timingStatus').property('text')
+    assert '00:00:01.000' in d.findChild(QObject, 'pointOriginalTime').property('text')
+    review = d.findChild(QObject, 'timingReviewButton')
+    assert not review.property('enabled')
+    js(d, 'editTarget("00:00:02.000")')
+    assert 'ещё не учтено' in d.findChild(QObject, 'pointEntryStatus').property('text')
+    click(d, d.findChild(QObject, 'setSyncPoint'))
+    assert review.property('enabled')
+    assert 'Точка добавлена' in d.findChild(QObject, 'pointEntryStatus').property('text')
+    assert 'Одна точка' in d.findChild(QObject, 'pointMappingExplanation').property('text')
+    assert '+1,000' in d.findChild(QObject, 'pointMappingExplanation').property('text') or '+1.000' in d.findChild(QObject, 'pointMappingExplanation').property('text')
+    click(d, review)
+    scroll = d.findChild(QObject, 'timingDetailScroll')
+    result = d.findChild(QObject, 'timingResultCard')
+    assert scroll.property('contentItem').property('contentY') > 0
+    assert result.mapToScene(QPointF(0, 0)).y() < d.height() - 100
+    assert '00:00:02.000' in d.findChild(QObject, 'timingAfterResult').property('text')
+    # A different cue returns to step 2 and loads its original time, not the
+    # shifted preview, so adding another anchor cannot accidentally double it.
+    b.timing.selectPreview(5)
+    QTest.qWait(40)
+    assert scroll.property('contentItem').property('contentY') == 0
+    assert d.findChild(QObject, 'pointTargetTime').property('text') == '00:00:51.000'
+    js(d, 'editTarget("00:01:02.000")')
+    assert not review.property('enabled')
+    click(d, d.findChild(QObject, 'setSyncPoint'))
+    assert 'Точек: 2' in d.findChild(QObject, 'pointMappingExplanation').property('text')
+    assert '00:01:02.000' in d.findChild(QObject, 'timingAfterResult').property('text')
+    assert b.editor.document.cues[5].start == 51000
+    d.reject()
+
+
+def test_point_sync_player_capture_and_small_window_review(ui, monkeypatch):
+    b, w = ui
+    # Exercise the media-dependent controls with a deterministic player position.
+    b.media_controller.path = 'preview.wav'
+    monkeypatch.setattr(b.media_controller.player, 'position', lambda: 2000)
+    b.media_controller.changed.emit()
+    b.media_controller.positionChanged.emit()
+    played = []
+    monkeypatch.setattr(b.media_controller, 'playRange', lambda *args: played.append(args))
+    b.openPointSync()
+    d = w.findChild(QObject, 'shiftDialog')
+    d.resize(800, 660)
+    QTest.qWait(60)
+    capture = d.findChild(QObject, 'pointFromPlayer')
+    assert capture.property('enabled')
+    click(d, capture)
+    assert d.findChild(QObject, 'pointTargetTime').property('text') == '00:00:02.000'
+    for name in ('pointFromPlayer', 'setSyncPoint', 'timingReviewButton', 'applyTimingButton'):
+        item = d.findChild(QObject, name)
+        position = item.mapToScene(QPointF(0, 0))
+        assert 0 <= position.x() <= d.width() - item.width() + 1
+        assert 0 <= position.y() <= d.height() - item.height() + 1
+    click(d, d.findChild(QObject, 'setSyncPoint'))
+    click(d, d.findChild(QObject, 'timingReviewButton'))
+    click(d, d.findChild(QObject, 'timingPlayBefore'))
+    click(d, d.findChild(QObject, 'timingPlayAfter'))
+    assert played == [(1000, 3000), (2000, 4000)]
+    d.reject()

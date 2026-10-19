@@ -26,6 +26,11 @@ FILTERS = (
     ('characters', 'Персонажи', 'person.crop.square'),
 )
 
+
+def sidebar_filters(backend):
+    return tuple(row for row in FILTERS if row[0] != 'warnings' or backend.checksEnabled)
+
+
 if sys.platform == 'darwin':
     import objc
     import AppKit as AK
@@ -43,7 +48,7 @@ if sys.platform == 'darwin':
             self = objc.super(_SidebarDelegate, self).init()
             if self is not None:
                 self.host = host
-                self.nodes = [NSString.stringWithString_(row[0]) for row in FILTERS]
+                self.nodes = [NSString.stringWithString_(row[0]) for row in host.filters]
             return self
 
         def outlineView_numberOfChildrenOfItem_(self, view, item):
@@ -56,13 +61,19 @@ if sys.platform == 'darwin':
             return self.nodes[index]
 
         def outlineView_viewForTableColumn_item_(self, view, column, item):
-            index = next(i for i, row in enumerate(FILTERS) if row[0] == str(item))
-            key, title, symbol = FILTERS[index]
+            key, title, symbol = next(row for row in self.host.filters if row[0] == str(item))
             cell = AK.NSTableCellView.alloc().initWithFrame_(AK.NSMakeRect(0, 0, 160, 32))
             text = label(title)
             count = label(str(self.host.backend.counts[key]), True)
             text.setFont_(AK.NSFont.systemFontOfSize_(12 * self.host.scale))
             count.setFont_(AK.NSFont.systemFontOfSize_(10 * self.host.scale))
+            text.setLineBreakMode_(AK.NSLineBreakByTruncatingTail)
+            text.setUsesSingleLineMode_(True)
+            text.setToolTip_(title)
+            # Counts must keep their full width when the title is long.
+            text.setContentCompressionResistancePriority_forOrientation_(749, AK.NSLayoutConstraintOrientationHorizontal)
+            count.setContentCompressionResistancePriority_forOrientation_(1000, AK.NSLayoutConstraintOrientationHorizontal)
+            count.setAlignment_(AK.NSTextAlignmentRight)
             image = AK.NSImageView.alloc().initWithFrame_(AK.NSMakeRect(0, 0, 16, 16))
             image.setTranslatesAutoresizingMaskIntoConstraints_(False)
             image.setImage_(AK.NSImage.imageWithSystemSymbolName_accessibilityDescription_(symbol, title))
@@ -86,21 +97,27 @@ if sys.platform == 'darwin':
         def outlineViewSelectionDidChange_(self, notification):
             host = self.host
             row = host.outline.selectedRow()
-            if not host.syncing and 0 <= row < len(FILTERS):
-                host.backend.setFilter(FILTERS[row][0])
+            if not host.syncing and not host.blocked and 0 <= row < len(host.filters):
+                host.backend.setFilter(host.filters[row][0])
                 # flush() can reject a filter change; restore backend selection.
                 host.sync()
 
         def characterChanged_(self, sender):
+            if self.host.blocked:
+                return
             self.host.backend.setCharacterFilter('' if sender.indexOfSelectedItem() == 0 else str(sender.titleOfSelectedItem()))
             self.host.sync()
 
         def openMedia_(self, sender):
+            if self.host.blocked:
+                return
             self.host.backend.openMedia()
 
     class _SidebarHost:
         def __init__(self, window, backend):
             self.backend, self.syncing, self.snapshot = backend, False, None
+            self.filters = sidebar_filters(backend)
+            self.blocked = False
             self.scale = backend.appearance.general['uiScale'] / 100
             self.qt_view = objc.objc_object(c_void_p=int(window.winId()))
             self.effect = NSClassFromString('NSGlassEffectView').alloc().initWithFrame_(AK.NSMakeRect(0, 0, 0, 0))
@@ -115,7 +132,9 @@ if sys.platform == 'darwin':
             self.outline = AK.NSOutlineView.alloc().initWithFrame_(AK.NSMakeRect(0, 0, 160, 170))
             column = AK.NSTableColumn.alloc().initWithIdentifier_('filter')
             column.setWidth_(160)
+            column.setResizingMask_(AK.NSTableColumnAutoresizingMask)
             self.outline.addTableColumn_(column)
+            self.outline.setColumnAutoresizingStyle_(AK.NSTableViewLastColumnOnlyAutoresizingStyle)
             self.outline.setOutlineTableColumn_(column)
             self.outline.setHeaderView_(None)
             self.outline.setRowHeight_(32 * self.scale)
@@ -190,7 +209,7 @@ if sys.platform == 'darwin':
             for node, size in self.font_nodes:
                 node.setFont_(AK.NSFont.systemFontOfSize_(size * self.scale))
             self.outline.setRowHeight_(32 * self.scale)
-            self.scroll_height.setConstant_(170 * self.scale)
+            self.scroll_height.setConstant_((32 * len(self.filters) + 10) * self.scale)
             self.snapshot = None
             self.sync()
 
@@ -200,7 +219,7 @@ if sys.platform == 'darwin':
             self.syncing = True
             try:
                 backend = self.backend
-                row = next(i for i, f in enumerate(FILTERS) if f[0] == backend.activeFilter)
+                row = next((i for i, f in enumerate(self.filters) if f[0] == backend.activeFilter), 0)
                 if self.outline.selectedRow() != row:
                     self.outline.selectRowIndexes_byExtendingSelection_(NSIndexSet.indexSetWithIndex_(row), False)
                 selected = backend.characterFilter
@@ -211,15 +230,19 @@ if sys.platform == 'darwin':
                 self.character.selectItemAtIndex_(titles.index(selected) if selected in titles else 0)
                 state = (tuple(backend.counts.values()), tuple(backend.characters), backend.activeFilter,
                          backend.characterFilter, backend.media_controller.name, backend.media_controller.keyframeCount,
-                         backend.busy)
+                         backend.busy, backend.checksEnabled, self.blocked)
                 if state == self.snapshot:
                     return
                 self.snapshot = state
+                self.filters = sidebar_filters(backend)
+                self.delegate.nodes = [NSString.stringWithString_(row[0]) for row in self.filters]
+                self.scroll_height.setConstant_((32 * len(self.filters) + 10) * self.scale)
                 self.outline.reloadData()
-                row = next(i for i, f in enumerate(FILTERS) if f[0] == backend.activeFilter)
+                row = next((i for i, f in enumerate(self.filters) if f[0] == backend.activeFilter), 0)
                 self.outline.selectRowIndexes_byExtendingSelection_(NSIndexSet.indexSetWithIndex_(row), False)
-                self.character.setEnabled_(not backend.busy)
-                self.outline.setEnabled_(not backend.busy)
+                enabled = not backend.busy and not self.blocked
+                for control in (self.character, self.outline, self.open_button):
+                    control.setEnabled_(enabled)
                 name = backend.media_controller.name
                 self.media.setStringValue_(name)
                 self.media.setToolTip_(name)
@@ -235,6 +258,10 @@ if sys.platform == 'darwin':
             y = rect.y() if self.qt_view.isFlipped() else self.qt_view.bounds().size.height - rect.bottom()
             frame = self.qt_view.convertRect_toView_(AK.NSMakeRect(rect.x(), y, rect.width(), rect.height()), self.parent_view)
             self.effect.setFrame_(frame)
+            # Source-list style adds its own horizontal insets. Fit the column
+            # to the actual viewport after glass/stack layout, including resize.
+            self.content.layoutSubtreeIfNeeded()
+            self.outline.sizeLastColumnToFit()
             self.effect.setHidden_(False)
 
         def close(self, *_args):
@@ -257,11 +284,13 @@ class NativeGlassSidebar(QQuickItem):
     activeChanged = Signal()
     integrationChanged = Signal()
     obscuredChanged = Signal()
+    blockedChanged = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self._integration = self._host = self._window = None
         self._obscured = False
+        self._blocked = False
         self._state = None
         self.windowChanged.connect(self._attach)
         for signal in (self.visibleChanged, self.obscuredChanged, self.xChanged, self.yChanged,
@@ -297,6 +326,19 @@ class NativeGlassSidebar(QQuickItem):
             if value and self._host:
                 self._host.effect.setHidden_(True)
 
+    @Property(bool, notify=blockedChanged)
+    def blocked(self):
+        return self._blocked
+
+    @blocked.setter
+    def blocked(self, value):
+        if self._blocked != value:
+            self._blocked = value
+            if self._host:
+                self._host.blocked = value
+                self._host.sync()
+            self.blockedChanged.emit()
+
     def _request_update(self):
         if self._window:
             self._window.update()
@@ -313,6 +355,8 @@ class NativeGlassSidebar(QQuickItem):
                 and self._integration.liquidGlassAvailable):
             try:
                 self._host = _SidebarHost(window, self._integration.backend)
+                self._host.blocked = self._blocked
+                self._host.sync()
                 self.destroyed.connect(self._host.close)
                 window.afterAnimating.connect(self._sync)
                 window.update()

@@ -20,7 +20,7 @@ RowLayout {
         Label { text: row.title; Layout.fillWidth: true; wrapMode: Text.Wrap }
         Label { visible: text.length > 0; text: row.description; opacity: 0.6; font.pixelSize: 11; Layout.fillWidth: true; wrapMode: Text.Wrap }
     }
-    Slider {
+    AppSlider {
         Layout.preferredWidth: 110
         visible: row.width > 530
         from: row.from; to: row.to; stepSize: row.step

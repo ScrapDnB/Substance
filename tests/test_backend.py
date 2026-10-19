@@ -33,6 +33,21 @@ def backend(app, tmp_path, monkeypatch):
     bridge.shutdown()
 
 
+def test_newly_saved_projects_enter_recents_without_duplicates(backend, tmp_path):
+    first = str(tmp_path / 'First.substance')
+    second = str(tmp_path / 'Second.substance')
+    assert backend._save_path(first)
+    assert backend.recentFiles[0] == first
+    assert backend._save_path(second)
+    assert backend._save_path(first)
+    assert backend.recentFiles[:2] == [first, second]
+    import json
+    assert json.loads(backend.settings.value('recents'))[:2] == [first, second]
+    invalid = str(tmp_path / 'Bad.ass.substance')
+    assert not backend._save_path(invalid)
+    assert invalid not in backend.recentFiles
+
+
 def test_selection_filters_and_merge_follow_result(backend):
     assert backend.select(0, 0)
     assert backend.select(1, Qt.KeyboardModifier.ShiftModifier.value)

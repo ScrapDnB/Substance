@@ -6,7 +6,6 @@ from typing import Callable
 import re
 
 from .document import Cue, Document, identity, plain_text
-from .timecode import frame_time
 from .project import ProjectEdits, sync_characters, rebind_reviews
 
 
@@ -218,7 +217,7 @@ class Editor(ProjectEdits):
                 doc.cues[i].character = canonical
         return self.transact('Назначение персонажа', edit)
 
-    def batch(self, indices: list[int], action: str, value=None) -> None:
+    def batch(self, indices: list[int], action: str, value=None, *, frame_times=()) -> None:
         def apply(doc):
             if action == "sort":
                 doc.cues.sort(key=lambda c: (c.start, c.end))
@@ -231,9 +230,14 @@ class Editor(ProjectEdits):
                 elif action == "comment":
                     c.comment = bool(value)
                 elif action == "frames":
-                    c.start, c.end = frame_time(c.start, doc.fps), frame_time(c.end, doc.fps)
+                    from .timing_processing import nearest_frame
+                    c.start, c.end = nearest_frame(c.start, frame_times, doc.fps), nearest_frame(c.end, frame_times, doc.fps)
                     if c.end <= c.start:
-                        c.end = c.start + max(1, round(1000 / doc.fps))
+                        from bisect import bisect_right
+                        next_frame = bisect_right(frame_times, c.start)
+                        if frame_times and next_frame >= len(frame_times):
+                            raise ValueError('Последний кадр не позволяет задать положительную длительность реплики.')
+                        c.end = frame_times[next_frame] if frame_times else c.start + max(1, round(1000 / doc.fps))
                 elif action == "lead":
                     c.start = max(0, c.start - int(value[0]))
                     c.end += int(value[1])
@@ -269,7 +273,7 @@ class Editor(ProjectEdits):
         return count
 
 
-def quality(cue: Cue, *, next_cue: Cue | None = None, cps_limit=20, line_limit=42, line_count_limit=2, show_length=True, show_speed=True, show_lines=True) -> dict:
+def quality(cue: Cue, *, next_cue: Cue | None = None, cps_limit=20, line_limit=42, line_count_limit=2, show_length=True, show_speed=True, show_lines=True, show_overlaps=True) -> dict:
     text = plain_text(cue.output_text)
     cps = len(text.replace("\n", "")) * 1000 / max(1, cue.end - cue.start)
     lines = text.splitlines() or [""]
@@ -286,7 +290,7 @@ def quality(cue: Cue, *, next_cue: Cue | None = None, cps_limit=20, line_limit=4
         messages.append(f"Строка длиннее {line_limit} знаков")
     if show_lines and len(lines) > line_count_limit:
         messages.append(f"Больше {line_count_limit} строк")
-    if next_cue and not cue.comment and not next_cue.comment and cue.end > next_cue.start and cue.start < next_cue.end:
+    if show_overlaps and next_cue and not cue.comment and not next_cue.comment and cue.end > next_cue.start and cue.start < next_cue.end:
         messages.append("Пересечение с соседней репликой")
     if cue.comment:
         messages = []

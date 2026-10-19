@@ -18,7 +18,7 @@ NativeDialog {
     Connections {
         target: dialog.session
         function onChanged() { if (dialog.refreshing && !backend.onlineSession.busy) dialog.loadComparison() }
-        function onResolved() { dialog.close() }
+        function onResolved() { dialog.dismiss() }
     }
     ColumnLayout {
         anchors.fill: parent
@@ -87,7 +87,7 @@ NativeDialog {
         Label { text: "Перед согласованием прежний черновик сохраняется отдельной копией. Undo согласованного текста отменяет только внесённые в него мои правки."; wrapMode: Text.Wrap; Layout.fillWidth: true; color: dialog.colors.muted }
         RowLayout {
             Layout.alignment: Qt.AlignRight
-            Button { text: "Закрыть"; onClicked: dialog.close() }
+            Button { text: "Закрыть"; onClicked: dialog.dismiss() }
             Button { text: "Взять сервер целиком"; enabled: dialog.session.canResolve; onClicked: dialog.session.resolve(dialog.view.token, {}, "server") }
             Button { text: "Оставить мой целиком"; enabled: dialog.session.canResolve; onClicked: dialog.session.resolve(dialog.view.token, {}, "mine") }
             Button { objectName: "comparisonResolve"; text: "Согласовать выбранное"; highlighted: true; enabled: dialog.session.canResolve && !dialog.view.error && (dialog.view.conflicts || []).every(r => dialog.choices[r.key] === "mine" || dialog.choices[r.key] === "server"); onClicked: dialog.session.resolve(dialog.view.token, dialog.choices, "merge") }

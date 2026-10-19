@@ -1,8 +1,8 @@
 import QtQuick
 import QtQuick.Controls
 
-// A desktop dialog must be a real window. Popup.Window still uses Qt.Popup
-// (without a system title bar); Popup.Item draws inside the editor's overlay.
+// Auxiliary dialogs use a real system window. Workflow sections can host
+// the same body and action bar directly in the document workspace.
 ApplicationWindow {
     id: dialog
     default property alias dialogContent: body.data
@@ -13,6 +13,9 @@ ApplicationWindow {
     property int preferredWidth: 480
     property int preferredHeight: Math.ceil(body.implicitHeight + 40 + (footer ? footer.height : 0))
     property var returnFocus: null
+    property Item embeddedHost: null
+    property bool embeddedActive: false
+    readonly property bool presented: visible || embeddedActive
     signal opened()
     signal closed()
     signal accepted()
@@ -22,8 +25,8 @@ ApplicationWindow {
     flags: Qt.Dialog | Qt.WindowTitleHint | Qt.WindowCloseButtonHint
     modality: modal ? Qt.ApplicationModal : Qt.NonModal
     font.pixelSize: 13
-    width: Math.min(preferredWidth, Screen.desktopAvailableWidth - 48)
-    height: Math.min(preferredHeight, Screen.desktopAvailableHeight - 80)
+    width: embeddedHost ? embeddedHost.width : Math.min(preferredWidth, Screen.desktopAvailableWidth - 48)
+    height: embeddedHost ? embeddedHost.height : Math.min(preferredHeight, Screen.desktopAvailableHeight - 80)
     minimumWidth: Math.min(preferredWidth, Screen.desktopAvailableWidth - 48)
     minimumHeight: Math.min(preferredHeight, Screen.desktopAvailableHeight - 80)
     color: colors.sidebar
@@ -38,6 +41,11 @@ ApplicationWindow {
 
     function open() {
         if (!available) return
+        if (embeddedHost && !embeddedHost.visible) detachEmbedding()
+        if (embeddedHost) {
+            if (!embeddedActive) { embeddedActive = true; opened() }
+            return
+        }
         if (visible) { raise(); requestActivate(); return }
         let parentWindow = transientParent as ApplicationWindow
         returnFocus = parentWindow ? parentWindow.activeFocusItem : null
@@ -46,9 +54,14 @@ ApplicationWindow {
         raise()
         requestActivate()
     }
-    function accept() { accepted(); close() }
-    function reject() { rejected(); close() }
-    onAvailableChanged: { if (!available && visible) close() }
+    function detachEmbedding() { embeddedActive = false; embeddedHost = null }
+    function dismiss() {
+        if (embeddedActive) { embeddedActive = false; closed() }
+        else close()
+    }
+    function accept() { accepted(); dismiss() }
+    function reject() { rejected(); dismiss() }
+    onAvailableChanged: { if (!available && presented) dismiss() }
     onVisibleChanged: {
         if (visible) opened()
         else {
@@ -61,11 +74,25 @@ ApplicationWindow {
         }
     }
 
+    // The same controls and controller state serve a native window and a page.
+    // Moving the body and footer also keeps custom action bars and previews.
+    property Item embeddedSurface: Item {
+        parent: dialog.embeddedHost
+        width: dialog.embeddedHost ? dialog.embeddedHost.width : 0
+        height: dialog.embeddedHost ? dialog.embeddedHost.height : 0
+        visible: dialog.embeddedActive
+    }
+    Binding { target: dialog.footer; property: "parent"; value: dialog.embeddedSurface; when: dialog.embeddedHost !== null }
+    Binding { target: dialog.footer; property: "x"; value: 0; when: dialog.embeddedHost !== null }
+    Binding { target: dialog.footer; property: "y"; value: dialog.embeddedSurface.height - (dialog.footer ? dialog.footer.height : 0); when: dialog.embeddedHost !== null }
+    Binding { target: dialog.footer; property: "width"; value: dialog.embeddedSurface.width; when: dialog.embeddedHost !== null }
+
     property Item dialogBody: Item {
         id: body
-        parent: dialog.contentItem
+        parent: dialog.embeddedHost ? dialog.embeddedSurface : dialog.contentItem
         anchors.fill: parent
         anchors.margins: 20
+        anchors.bottomMargin: 20 + (dialog.embeddedHost && dialog.footer ? dialog.footer.height : 0)
         focus: true
         Keys.onEscapePressed: event => { dialog.reject(); event.accepted = true }
         implicitHeight: {

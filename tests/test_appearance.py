@@ -38,14 +38,51 @@ def test_editor_details_keep_draft_and_actions_accessible_without_video(ui, mode
     document = b.editor.document.to_dict()
     panel = window.findChild(QObject, 'timingEditor' if mode == 'timing' else 'translationEditor')
 
-    for name in ('cueChecksToggle', 'cueReviewsToggle'):
-        button = panel.findChild(QObject, name)
-        assert button.isVisible() and not button.property('checked')
-        point = button.mapToScene(QPointF(button.width() / 2, button.height() / 2)).toPoint()
+    checks = panel.findChild(QObject, 'cueChecksToggle')
+    reviews = panel.findChild(QObject, 'cueReviewsToggle')
+    assert checks.property('count') == len(b.current['issues']) > 0
+    assert reviews.property('count') == 1
+    for button in (checks, reviews):
+        assert button.property('iconOnly') and not button.property('text')
+        badge = button.findChild(QObject, 'statusCountBadge')
+        assert badge.isVisible()
+        assert button.findChild(QObject, 'statusCountText').property('text') == str(button.property('count'))
+
+    def assert_status_positions():
+        text_pos = editor.mapToItem(panel, QPointF())
+        check_pos = checks.mapToItem(panel, QPointF())
+        review_pos = reviews.mapToItem(panel, QPointF())
+        assert check_pos.x() >= text_pos.x() + editor.width()
+        assert review_pos.x() == pytest.approx(check_pos.x())
+        assert review_pos.y() >= check_pos.y() + checks.height()
+
+    def click(item):
+        point = item.mapToScene(QPointF(item.width() / 2, item.height() / 2)).toPoint()
         QTest.mouseClick(window, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, point)
-        QTest.qWait(20)
-        assert button.property('checked')
-    assert panel.findChild(QObject, 'cueChecksDetails').isVisible()
+        QTest.qWait(30)
+
+    checks_popup = panel.findChild(QObject, 'cueChecksPopup')
+    reviews_popup = panel.findChild(QObject, 'cueReviewsPopup')
+    text_geometry = (editor.width(), editor.height(), editor.mapToScene(QPointF()))
+    assert_status_positions()
+    for button, popup, details in ((checks, checks_popup, 'cueChecksDetails'),
+                                   (reviews, reviews_popup, 'cueReviewsDetails')):
+        assert button.isVisible() and not button.property('checked')
+        click(button)
+        assert button.property('checked') and popup.property('visible')
+        assert panel.findChild(QObject, details).isVisible()
+        assert (editor.width(), editor.height(), editor.mapToScene(QPointF())) == text_geometry
+    assert not checks_popup.property('visible')
+    click(reviews)  # The anchor itself toggles the bubble closed.
+    assert not reviews_popup.property('visible') and not reviews.property('checked')
+    click(reviews)
+    QTest.keyClick(window, Qt.Key.Key_Escape)
+    QTest.qWait(30)
+    assert not reviews_popup.property('visible') and not reviews.property('checked')
+    click(checks)
+    header = panel.findChild(QObject, 'cueEditorHeader')
+    click(header)  # Clicking elsewhere dismisses the bubble.
+    assert not checks_popup.property('visible') and not checks.property('checked')
     assert window.findChild(QObject, 'subtitleEditor') is editor
     assert editor.property('text') == 'Незавершённая правка'
     assert editor.property('cursorPosition') == 7
@@ -56,14 +93,55 @@ def test_editor_details_keep_draft_and_actions_accessible_without_video(ui, mode
     b.appearance.setValue('general', 'sidebarWidth', 340)
     window.resize(980, 650)
     QTest.qWait(40)
-    # Expanding long auxiliary content must not scroll primary actions away.
-    for name in ('cueChecksToggle', 'cueReviewsToggle', 'applyCueButton'):
+    # Apply stays fixed; the status controls now scroll together with the text.
+    for name in ('applyCueButton',):
         item = panel.findChild(QObject, name)
         point = item.mapToItem(panel, QPointF())
         assert point.x() >= 0 and point.y() >= 0
         assert point.x() + item.width() <= panel.width() + 1
         assert point.y() + item.height() <= panel.height() + 1
+    assert_status_positions()
+    if mode == 'translation':
+        b.appearance.setValue('translation', 'originalBelow', True)
+        QTest.qWait(40)
+        assert_status_positions()
+        assert window.findChild(QObject, 'subtitleEditor') is editor
+        assert editor.property('text') == 'Незавершённая правка'
+    scroll = panel.findChild(QObject, 'cueEditorScroll')
+    # Even with the original stacked above the translation, the status buttons
+    # remain reachable in the same scroll area as the editable field.
+    view = scroll.property('contentItem')
+    target = reviews.mapToItem(view, QPointF(0, reviews.height())).y()
+    view.setProperty('contentY', max(0, view.property('contentY') + target - scroll.height() + 8))
+    QTest.qWait(40)
+    for button in (checks, reviews):
+        point = button.mapToItem(scroll, QPointF())
+        assert point.y() >= 0
+        assert point.y() + button.height() <= scroll.height() + 1
+    click(reviews)
+    assert reviews_popup.property('visible')
+    popup_parent = reviews_popup.property('parent')
+    top_left = popup_parent.mapToScene(QPointF(reviews_popup.property('x'), reviews_popup.property('y')))
+    assert top_left.x() >= 0 and top_left.y() >= 0
+    assert top_left.x() + reviews_popup.property('width') <= window.width()
+    assert top_left.y() + reviews_popup.property('height') <= window.height()
+    for name in ('cueAllReviewsButton', 'cueAddNoteButton', 'cueProposeEditButton'):
+        action = panel.findChild(QObject, name)
+        assert action.isVisible() and action.isEnabled()
+        point = action.mapToScene(QPointF())
+        assert point.y() + action.height() <= window.height()
+    QTest.keyClick(window, Qt.Key.Key_Escape)
+    QTest.qWait(30)
+    assert not reviews_popup.property('visible')
     assert not window.grabWindow().isNull()
+
+    # Counts follow the selected cue; zero never leaves an empty pill or a 0.
+    assert b.select(1, 0)
+    QTest.qWait(40)
+    for button in (checks, reviews):
+        assert button.property('count') == 0
+        assert not button.findChild(QObject, 'statusCountBadge').isVisible()
+        assert button.findChild(QObject, 'statusCountText').property('text') == ''
 
 
 def test_settings_validation_migration_persistence_and_resets(tmp_path):
@@ -77,6 +155,7 @@ def test_settings_validation_migration_persistence_and_resets(tmp_path):
     assert a.general['uiScale'] == 125
     assert a.general['editorFont'] == 16
     assert a.general['wrapRows'] is False
+    assert a.general['sidebarVisible'] is True
     assert a.general['waveColor'] == ''
     assert a.timing['videoPercent'] == 25 and a.timing['videoSide'] == 'left'
     assert a.translation == DEFAULTS['translation']
@@ -162,6 +241,36 @@ def ui(tmp_path, monkeypatch, qt_application):
     assert not errors, errors
 
 
+def test_sidebar_visibility_persists_across_windows(ui):
+    backend, window, js = ui
+    before = backend.editor.document.to_dict()
+    assert window.property('sidebarVisible') is True
+    for shown in (False, True):
+        js('window.toggleSidebar()')
+        assert window.property('sidebarVisible') is shown
+        assert window.findChild(QObject, 'sidebarPane').isVisible() is shown
+        backend.appearance.resetSizes()
+        assert window.property('sidebarVisible') is shown
+        backend.settings.sync()
+        restored = Backend()
+        engine = QQmlApplicationEngine()
+        engine.rootContext().setContextProperty('backend', restored)
+        try:
+            engine.load(QUrl.fromLocalFile(str(ROOT / 'substance/qml/Main.qml')))
+            assert engine.rootObjects()
+            reopened = engine.rootObjects()[0]
+            QTest.qWait(40)
+            assert reopened.property('sidebarVisible') is shown
+            assert reopened.findChild(QObject, 'sidebarPane').isVisible() is shown
+        finally:
+            for root in engine.rootObjects():
+                shiboken6.delete(root)
+            shiboken6.delete(engine)
+            restored.shutdown()
+    assert backend.editor.document.to_dict() == before
+    assert not backend.dirty
+
+
 def test_live_settings_preserve_edit_and_reorder_real_panels(ui):
     b, w, js = ui
     editor = w.findChild(QObject, 'subtitleEditor')
@@ -193,7 +302,7 @@ def test_live_settings_preserve_edit_and_reorder_real_panels(ui):
     assert b.draft['text'] == 'Незавершённая правка'
     video = w.findChild(QObject, 'timingVideo')
     panel = w.findChild(QObject, 'timingEditor')
-    assert video.x() > panel.x()
+    assert video.mapToScene(QPointF()).x() > panel.mapToScene(QPointF()).x()
     wave = w.findChild(QObject, 'audioWaveform')
     assert wave.property('paletteColors')['wave'].name() == '#00aa77'
     assert not w.grabWindow().isNull()
@@ -204,7 +313,7 @@ def test_live_settings_preserve_edit_and_reorder_real_panels(ui):
     assert not w.findChild(QObject, 'timingAudio').property('visible')
     a.reset('timing')
     QTest.qWait(80)
-    assert video.property('visible') and video.x() < panel.x()
+    assert video.property('visible') and video.mapToScene(QPointF()).x() < panel.mapToScene(QPointF()).x()
     assert editor.property('text') == 'Незавершённая правка'
 
 

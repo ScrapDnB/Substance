@@ -1,7 +1,7 @@
 import QtQuick
 import QtQuick.Controls
 
-Slider {
+AppSlider {
     id: control
     implicitHeight: 28
     readonly property real knobScale: Qt.platform.os === "osx" ? 0.65 : 0.75

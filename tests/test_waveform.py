@@ -2,10 +2,87 @@
 import numpy as np
 import pytest
 import shiboken6
-from PySide6.QtGui import QImage, QPainter
+from PySide6.QtCore import QPoint, QPointF, Qt
+from PySide6.QtGui import QImage, QPainter, QWheelEvent
 
 from substance.media import MediaController, WAVEFORM_PEAK_MS
 from substance.visuals import Waveform, waveform_envelope
+
+
+@pytest.fixture
+def navigation_wave(qt_application):
+    wave = Waveform()
+    wave.setWidth(1000)
+    wave.setViewport(5000, 10000)
+    yield wave
+    shiboken6.delete(wave)
+
+
+def wheel(wave, pixels=(0, 0), angles=(0, 0), modifiers=Qt.KeyboardModifier.NoModifier,
+          x=750, phase=Qt.ScrollPhase.ScrollUpdate, inverted=False):
+    event = QWheelEvent(QPointF(x, 60), QPointF(x, 60), QPoint(*pixels), QPoint(*angles),
+                        Qt.MouseButton.NoButton, modifiers, phase, inverted)
+    wave.wheelEvent(event)
+    assert event.isAccepted()
+
+
+@pytest.mark.parametrize('pixels', [(-37, 0), (0, -37), (-37, -2)])
+def test_trackpad_scroll_uses_pixels_and_dominant_axis(navigation_wave, pixels):
+    wave = navigation_wave
+    wheel(wave, pixels=pixels, angles=(0, -120))
+    assert wave.viewStart == 5370  # Ignore angle fallback when pixels are present.
+    assert wave.span == 10000
+    wheel(wave, pixels=tuple(-v for v in pixels), inverted=True)
+    assert wave.viewStart == 5000  # OS direction is already encoded in the deltas.
+
+
+def test_trackpad_scroll_accumulates_submillisecond_steps_and_stops_at_zero(navigation_wave):
+    wave = navigation_wave
+    wave.setViewport(0, 1000)
+    wave.setWidth(10000)
+    for _ in range(10):
+        wheel(wave, pixels=(-1, 0))
+    assert wave.viewStart == 1
+    wheel(wave, pixels=(100, 0))
+    assert wave.viewStart == 0
+    for _ in range(10):
+        wheel(wave, pixels=(-1, 0))
+    assert wave.viewStart == 1
+
+
+@pytest.mark.parametrize('modifiers', [Qt.KeyboardModifier.ControlModifier, Qt.KeyboardModifier.MetaModifier])
+def test_wheel_zoom_is_continuous_and_anchored_to_pointer(navigation_wave, modifiers):
+    wave = navigation_wave
+    anchor = wave.viewStart + wave.span * 0.75
+    wheel(wave, angles=(0, 120), modifiers=modifiers)
+    assert wave.span == 8000 and wave.viewStart == 6500
+    wheel(wave, pixels=(0, 10), modifiers=modifiers)
+    assert 7500 < wave.span < 8000
+    assert wave.viewStart + wave.span * 0.75 == pytest.approx(anchor, abs=0.5)
+    wheel(wave, pixels=(0, -10), modifiers=modifiers)
+    assert wave.span == 8000
+
+
+def test_empty_scroll_phases_and_zoom_limits_do_not_move_view(navigation_wave):
+    wave = navigation_wave
+    for phase in (Qt.ScrollPhase.ScrollBegin, Qt.ScrollPhase.ScrollEnd):
+        wheel(wave, modifiers=Qt.KeyboardModifier.ControlModifier, phase=phase)
+    assert (wave.viewStart, wave.span) == (5000, 10000)
+    for span, factor in ((1000, 0.5), (300000, 2)):
+        wave.setViewport(5000, span)
+        wave.zoomAt(factor, 750)
+        assert (wave.viewStart, wave.span) == (5000, span)
+    wave.setViewport(0, 1000)
+    wave.zoomAt(2, 750)
+    assert wave.viewStart == 0 and wave.span == 2000
+    for invalid in (0, -1, float('nan'), float('inf')):
+        wave.zoomAt(invalid, 750)
+    assert (wave.viewStart, wave.span) == (0, 2000)
+
+
+def test_ordinary_mouse_wheel_still_pans(navigation_wave):
+    wheel(navigation_wave, angles=(0, -120))
+    assert navigation_wave.viewStart == 6250
 
 
 @pytest.mark.parametrize('view,span,columns', [(0, 1000, 137), (123.25, 500, 300), (990, 100, 100)])

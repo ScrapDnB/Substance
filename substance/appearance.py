@@ -33,7 +33,7 @@ DEFAULTS = {
     "general": {
         "uiScale": 100, "tableFont": 12, "editorFont": 16, "originalFont": 14,
         "textFamily": "", "timecodeFont": "modern", "timecodeSize": 12, "rowHeight": 35, "wrapRows": False,
-        "stripedRows": True, "rowLines": True, "sidebarWidth": 220,
+        "stripedRows": True, "rowLines": True, "sidebarWidth": 220, "sidebarVisible": True,
         "accentColor": "", "selectionColor": "", "waveColor": "",
     },
     "lightColors": {"editorBackground": "", "editorText": ""},
@@ -93,7 +93,10 @@ def validated(group, name, value):
 
 class AppearanceSettings(QObject):
     changed = Signal()
+    columnsChanged = Signal()
     STORAGE_KEY = "appearance.v1"
+    COLUMN_BOUNDS = {'number': 32, 'start': 66, 'end': 66, 'portrait': 32, 'actor': 56,
+                     'text': 100, 'original': 100, 'translation': 100, 'remarks': 44}
 
     def __init__(self, settings, parent=None):
         super().__init__(parent)
@@ -114,6 +117,70 @@ class AppearanceSettings(QObject):
                 name: validated(group, name, source.get(name, default))
                 for name, default in defaults.items()
             }
+        try:
+            columns = json.loads(settings.value('tableColumns.v1', '{}'))
+        except (ValueError, TypeError):
+            columns = {}
+        self._columns = {mode: {} for mode in ('timing', 'translation')}
+        if isinstance(columns, dict):
+            for mode, values in self._columns.items():
+                source = columns.get(mode, {})
+                if isinstance(source, dict):
+                    for key, value in source.items():
+                        if key in self.COLUMN_BOUNDS and type(value) in (int, float) and math.isfinite(value):
+                            values[key] = max(self.COLUMN_BOUNDS[key], min(1600, round(value)))
+        try:
+            visibility = json.loads(settings.value('tableColumns.visibility.v1', '{}'))
+        except (ValueError, TypeError):
+            visibility = {}
+        self._column_visibility = {mode: {} for mode in ('timing', 'translation')}
+        if isinstance(visibility, dict):
+            for mode, values in self._column_visibility.items():
+                source = visibility.get(mode, {})
+                if isinstance(source, dict):
+                    values.update({key: value for key, value in source.items()
+                                   if key in self.COLUMN_BOUNDS and isinstance(value, bool)})
+
+    @Property('QVariantMap', notify=columnsChanged)
+    def columnVisibility(self):
+        return {mode: dict(values) for mode, values in self._column_visibility.items()}
+
+    @Slot(str, str, bool)
+    def setColumnVisible(self, mode, key, visible):
+        if mode not in self._column_visibility or key not in self.COLUMN_BOUNDS:
+            return
+        if self._column_visibility[mode].get(key) != visible:
+            self._column_visibility[mode][key] = visible
+            self.settings.setValue('tableColumns.visibility.v1', json.dumps(self._column_visibility))
+            self.columnsChanged.emit()
+
+    @Slot(str)
+    def showAllColumns(self, mode):
+        if mode in self._column_visibility:
+            self._column_visibility[mode] = dict.fromkeys(self.COLUMN_BOUNDS, True)
+            self.settings.setValue('tableColumns.visibility.v1', json.dumps(self._column_visibility))
+            self.columnsChanged.emit()
+
+    @Property('QVariantMap', notify=columnsChanged)
+    def columnWidths(self):
+        return {mode: dict(values) for mode, values in self._columns.items()}
+
+    @Slot(str, str, float)
+    def setColumnWidth(self, mode, key, width):
+        if mode not in self._columns or key not in self.COLUMN_BOUNDS or not math.isfinite(width):
+            return
+        width = max(self.COLUMN_BOUNDS[key], min(1600, round(width)))
+        if self._columns[mode].get(key) != width:
+            self._columns[mode][key] = width
+            self.settings.setValue('tableColumns.v1', json.dumps(self._columns))
+            self.columnsChanged.emit()
+
+    @Slot(str, str)
+    def resetColumnWidth(self, mode, key):
+        if mode in self._columns and key in self._columns[mode]:
+            del self._columns[mode][key]
+            self.settings.setValue('tableColumns.v1', json.dumps(self._columns))
+            self.columnsChanged.emit()
 
     @Property("QVariantMap", notify=changed)
     def general(self):
@@ -195,7 +262,7 @@ class AppearanceSettings(QObject):
     def resetSizes(self):
         self._groups["general"].update({
             name: value for name, value in DEFAULTS["general"].items()
-            if not name.endswith("Color")
+            if not name.endswith("Color") and name != "sidebarVisible"
         })
         self._save()
 

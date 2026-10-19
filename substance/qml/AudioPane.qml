@@ -25,7 +25,9 @@ Pane {
                 Accessible.name: "Привязка к маркерам"
                 NativeToolTip { text: "Привязка к включённым типам маркеров" }
             }
-            Button { text: "⋯"; implicitWidth: 36 * pane.uiScale; Accessible.name: "Настройки привязки"; onClicked: snapMenu.popup()
+            // The macOS bezel is at least 44 points wide; a narrower item
+            // paints into the gap before the audio display selector.
+            Button { text: "⋯"; implicitWidth: (Qt.platform.os === "osx" ? 44 : 36) * pane.uiScale; Accessible.name: "Настройки привязки"; onClicked: snapMenu.popup()
                 Menu { id: snapMenu
                     MenuItem { text: "Склейки"; checkable: true; checked: backend.editorTools.snapOptions.cuts; onTriggered: backend.editorTools.setSnapOption("cuts", checked) }
                     MenuItem { text: "Ключевые кадры"; checkable: true; checked: backend.editorTools.snapOptions.frames; onTriggered: backend.editorTools.setSnapOption("frames", checked) }
@@ -66,7 +68,7 @@ Pane {
                 snapCues: backend.editorTools.snapOptions.cues
                 onSeekRequested: position => backend.media.seek(position)
                 onRangeRequested: (start, end) => backend.setRange(start, end)
-                Accessible.name: "Аудиотайминг. Перетащите границы реплики. Shift и перетаскивание задаёт интервал."
+                Accessible.name: "Аудиотайминг. Два пальца — прокрутка, щипок или Ctrl/⌘ и прокрутка — масштаб у указателя. Shift и перетаскивание задаёт интервал."
             }
             TracksPane {
                 visible: pane.tracksMode
@@ -76,6 +78,25 @@ Pane {
                 colors: pane.colors
                 wave: wave
                 snap: snap.checked
+            }
+            WheelHandler {
+                target: null
+                acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
+                acceptedModifiers: Qt.KeyboardModifierMask
+                onWheel: event => {
+                    wave.navigateWheel(event.pixelDelta.x, event.pixelDelta.y,
+                                       event.angleDelta.x, event.angleDelta.y,
+                                       event.modifiers, event.x)
+                    event.accepted = true
+                }
+            }
+            PinchHandler {
+                target: null
+                acceptedDevices: PointerDevice.TouchPad
+                xAxis.enabled: false
+                yAxis.enabled: false
+                rotationAxis.enabled: false
+                onScaleChanged: delta => wave.zoomAt(1 / delta, centroid.position.x)
             }
         }
         Pane {
@@ -115,7 +136,7 @@ Pane {
                         Layout.fillWidth: true
                         Layout.minimumWidth: 0
                         elide: Text.ElideRight
-                        text: backend.media.busy ? "Анализ аудио " + Math.round(backend.media.progress * 100) + "%" : "Shift — выделение · Правая кнопка — прокрутка"
+                        text: backend.media.busy ? "Анализ аудио " + Math.round(backend.media.progress * 100) + "%" : "Два пальца — прокрутка · Щипок — масштаб"
                         color: pane.colors.muted
                         font.pixelSize: Math.round(10 * pane.uiScale)
                     }

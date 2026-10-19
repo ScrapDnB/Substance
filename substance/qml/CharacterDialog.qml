@@ -38,8 +38,8 @@ NativeDialog {
 
     Connections {
         target: backend
-        function onChanged() { if (dialog.visible && !dialog.modified) dialog.reload() }
-        function onCardSaved(cardId) { if (dialog.visible) { dialog.editedId = cardId; dialog.modified = false } }
+        function onChanged() { if (dialog.presented && !dialog.modified) dialog.reload() }
+        function onCardSaved(cardId) { if (dialog.presented) { dialog.editedId = cardId; dialog.modified = false } }
     }
     RowLayout {
         anchors.fill: parent
@@ -113,14 +113,14 @@ NativeDialog {
                                     Button { text: "Основной"; enabled: !backend.onlineSession.active && modelData.id !== backend.currentCard.primary; onClicked: backend.portraitAction(dialog.editedId, modelData.id, "primary") }
                                     Button { text: "Удалить"; enabled: !backend.onlineSession.active; onClicked: backend.portraitAction(dialog.editedId, modelData.id, "delete") }
                                 }
-                                Button { text: "К кадру видео"; visible: modelData.media_path.length > 0; onClicked: { backend.seekPortrait(dialog.editedId, modelData.id); dialog.close() } }
+                                Button { text: "К кадру видео"; visible: modelData.media_path.length > 0; onClicked: { backend.seekPortrait(dialog.editedId, modelData.id); dialog.dismiss() } }
                             }
                         }
                     }
                     Label { text: "Реплики персонажа · " + backend.currentCard.cues.length; font.bold: true }
                     Repeater {
                         model: backend.currentCard.cues
-                        delegate: DialogItemDelegate { required property var modelData; Layout.fillWidth: true; text: modelData.number + " · " + modelData.time + " · " + modelData.text; onClicked: { backend.selectCueId(modelData.id); dialog.close() } }
+                        delegate: DialogItemDelegate { required property var modelData; Layout.fillWidth: true; text: modelData.number + " · " + modelData.time + " · " + modelData.text; onClicked: { backend.selectCueId(modelData.id); dialog.dismiss() } }
                     }
                 }
             }
@@ -132,7 +132,7 @@ NativeDialog {
             RowLayout {
                 Layout.alignment: Qt.AlignRight
                 Button { text: "Отменить изменения"; visible: dialog.modified; onClicked: { dialog.modified = false; backend.discardCardDraft(); dialog.reload() } }
-                Button { text: "Закрыть"; onClicked: { if (!dialog.modified || dialog.save()) dialog.close() } }
+                Button { text: "Закрыть"; onClicked: { if (!dialog.modified || dialog.save()) dialog.dismiss() } }
                 Button { objectName: "saveCharacterCard"; text: "Сохранить карточку"; highlighted: true; enabled: !backend.onlineSession.active && cardName.text.trim().length > 0; onClicked: dialog.save() }
             }
         }

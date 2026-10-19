@@ -4,10 +4,10 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "substance-editor"
-version = "0.9.0b1"
+version = "0.9.1b2"
 description = "Desktop ASS subtitle editor for timing and translation"
 requires-python = ">=3.11"
-dependencies = ["dubbing-online-client==0.1.0", "keyring>=25,<26", "paramiko>=3.5,<5", "certifi>=2025.1.31", "PySide6==6.10.2", "numpy>=2.2,<3", "opencv-python-headless>=4.10,<5", "onnxruntime>=1.20,<2", "Pillow>=11,<13", "filelock>=3.16,<4", "imageio-ffmpeg>=0.6,<1", "pyspellchecker>=0.8,<1", "pyobjc-core==12.1; sys_platform == 'darwin'", "pyobjc-framework-Cocoa==12.1; sys_platform == 'darwin'", "pyobjc-framework-Vision==12.1; sys_platform == 'darwin'", "pyobjc-framework-Quartz==12.1; sys_platform == 'darwin'", "pyobjc-framework-CoreML==12.1; sys_platform == 'darwin'"]
+dependencies = ["dubbing-online-client==0.1.0", "keyring>=25,<26", "paramiko>=3.5,<5", "certifi>=2025.1.31", "PySide6==6.10.2", "numpy>=2.2,<3", "av>=18.1,<19", "opencv-python-headless>=4.10,<5", "onnxruntime>=1.20,<2", "Pillow>=11,<13", "filelock>=3.16,<4", "imageio-ffmpeg>=0.6,<1", "pyspellchecker>=0.8,<1", "pyobjc-core==12.1; sys_platform == 'darwin'", "pyobjc-framework-Cocoa==12.1; sys_platform == 'darwin'", "pyobjc-framework-Vision==12.1; sys_platform == 'darwin'", "pyobjc-framework-Quartz==12.1; sys_platform == 'darwin'", "pyobjc-framework-CoreML==12.1; sys_platform == 'darwin'"]
 
 [project.optional-dependencies]
 dev = ["pytest>=8,<10", "pyinstaller>=6.15,<7"]
@@ -16,7 +16,7 @@ dev = ["pytest>=8,<10", "pyinstaller>=6.15,<7"]
 substance = "substance.app:main"
 
 [tool.setuptools.package-data]
-substance = ["qml/*.qml", "qml/+macOS/*.qml", "resources/*", "resources/icons/*.svg", "resources/fonts/*", "resources/licenses/**/*"]
+substance = ["qml/*.qml", "qml/+macOS/*.qml", "qml/+FluentWinUI3/*.qml", "resources/*", "resources/icons/*.svg", "resources/fonts/*", "resources/licenses/**/*"]
 
 [tool.setuptools.packages.find]
 include = ["substance*"]

@@ -73,6 +73,26 @@ def main():
         wait(250)
         check(chrome.nativeToolbarActive, 'Real NSToolbar attached')
         identifiers = chrome.diagnostics(window)['nativeToolbarItems']
+        check(identifiers[identifiers.index(chrome.MODE) - 1] == chrome.RECENTS,
+              'Recent projects immediately precede the editor modes')
+        check(identifiers[identifiers.index('substance.checks') - 1] == 'substance.scenes',
+              'Scene detection immediately precedes check and repair')
+        check(chrome._delegate.items['substance.scenes'].image() is not None,
+              'Scene detection uses a real split-frame SF Symbol')
+        recent_control = chrome._delegate.recent_control
+        example = str(root / 'substance/resources/example.ass')
+        backend._loaded(load_document(example), example)
+        recent_row = recent_control.menu().itemAtIndex_(1)
+        check(str(recent_row.representedObject()) == example,
+              'Recent projects menu follows newly opened documents')
+        check(NSApplication.sharedApplication().sendAction_to_from_(
+            recent_row.action(), recent_row.target(), recent_row), 'Native recent-project action dispatched')
+        for _ in range(100):
+            wait(20)
+            if not backend.busy:
+                break
+        check(not backend.busy and backend.path == example,
+              'Native recent-project action opens the selected document')
         media_index = identifiers.index('substance.media')
         check(identifiers[media_index + 1] == 'substance.transcribe', 'Recognition icon immediately follows video')
         check(chrome._delegate.items['substance.transcribe'].image() is not None, 'Recognition uses a real SF Symbol')
@@ -132,14 +152,36 @@ def main():
             check(backend._character_filter == backend.characters[0], 'Native character popup filters the document')
             backend.setCharacterFilter('')
             check(host.character.indexOfSelectedItem() == 0, 'Native character popup restores backend selection')
-            expression = QQmlExpression(qmlContext(window), window, 'findDialog.open()')
-            expression.evaluate()
+            for dialog in ('settingsDialog', 'findDialog'):
+                expression = QQmlExpression(qmlContext(window), window, dialog + '.open()')
+                expression.evaluate()
+                wait(80)
+                check(not expression.hasError() and window.property('modalOpen') and not host.effect.isHidden(),
+                      f'{dialog} retains native glass behind its separate window')
+                check(sidebar.blocked and not host.outline.isEnabled() and not host.character.isEnabled()
+                      and not host.open_button.isEnabled(), f'{dialog} blocks native sidebar actions')
+                check(not window.findChild(QObject, 'fallbackSidebar').isVisible(),
+                      f'{dialog} does not replace native glass with the QML fallback')
+                QQmlExpression(qmlContext(window), window, dialog + '.close()').evaluate()
+                wait(80)
+                check(not host.effect.isHidden() and not sidebar.blocked and host.outline.isEnabled()
+                      and host.character.isEnabled() and host.open_button.isEnabled(),
+                      f'Native sidebar remains visible and resumes actions after {dialog} closes')
+            backend.setFilter('warnings')
+            saved_checks = {key: backend.reviewSettings[key] for key in backend._review_defaults}
+            for key in saved_checks:
+                backend.setReviewSetting(key, False)
             wait(80)
-            check(not expression.hasError() and window.property('modalOpen') and host.effect.isHidden(),
-                  'QML modal overlay immediately hides native glass')
-            QQmlExpression(qmlContext(window), window, 'findDialog.close()').evaluate()
+            check(host.outline.numberOfRows() == 4 and backend.activeFilter == 'all'
+                  and host.outline.selectedRow() == 0, 'Disabling all checks removes native warnings and resets its active filter')
+            host.outline.selectRowIndexes_byExtendingSelection_(NSIndexSet.indexSetWithIndex_(1), False)
+            check(backend.activeFilter == 'notes', 'Native filter indices follow the removed warnings row')
+            backend.setFilter('all')
+            for key, value in saved_checks.items():
+                backend.setReviewSetting(key, value)
             wait(80)
-            check(not host.effect.isHidden(), 'Native glass returns after the overlay closes')
+            check(host.outline.numberOfRows() == 5 and host.outline.selectedRow() == 0,
+                  'Enabling checks restores the native warnings filter')
 
         # Register actual AppKit regions and exercise geometry, clipping and teardown.
         viewport = QQuickItem(window.contentItem())
@@ -214,7 +256,8 @@ def main():
         field.setProperty('text', '')
         type_text(window, 'Native toolbar draft')
         control = chrome._delegate.mode_control
-        control.setSelectedSegment_(1)
+        check(control.segmentCount() == 4 and [str(control.labelForSegment_(i)) for i in range(4)] == backend.sectionLabels, 'Four native workflow sections in the requested order')
+        control.setSelectedSegment_(2)
         check(send(control), 'Native segmented control action connected')
         wait(100)
         check(backend.mode == 'translation' and backend.editor.document.cues[0].text == 'Native toolbar draft', 'Mode action commits pending text')
@@ -225,15 +268,36 @@ def main():
         check(backend.editor.document.cues[0].translation == 'Translation' and field.hasActiveFocus(), 'Typing and focus survive native toolbar')
 
         backend.stage('start', '00:00:09.000')
-        control.setSelectedSegment_(0)
+        control.setSelectedSegment_(1)
         send(control)
-        check(backend.mode == 'translation' and control.selectedSegment() == 1, 'Invalid pending time rejects native mode action')
+        check(backend.mode == 'translation' and control.selectedSegment() == 2, 'Invalid pending time rejects native mode action')
         if sidebar.active:
             host.outline.selectRowIndexes_byExtendingSelection_(NSIndexSet.indexSetWithIndex_(1), False)
             check(backend.activeFilter == 'all' and host.outline.selectedRow() == 0,
                   'Invalid pending time rejects native navigation and restores selection')
         backend.stage('start', '00:00:01.000')
         backend.flush()
+        for index, section, launcher, dialog_name in [
+                (0, 'preparation', backend.openTranscription, 'transcriptionDialog'),
+                (3, 'post', backend.openChecks, 'editorToolsDialog')]:
+            control.setSelectedSegment_(index)
+            send(control)
+            wait(80)
+            launcher()
+            wait(120)
+            tool = window.findChild(QObject, dialog_name)
+            check(backend.section == section and tool.property('embeddedActive') and not tool.isVisible(),
+                  section + ' opens tool content inside the main window')
+            check(not sidebar.isVisible(), section + ' uses the left tool column')
+            column = window.findChild(QObject, section + 'ToolColumn')
+            check(column.mapToScene(QPointF()).x() == 0 and tool.property('dialogBody').mapToScene(QPointF()).x() > column.width(),
+                  section + ' places tool selection on the left and controls on the right')
+            folder = root / 'build/qa/workflow-sections-native'
+            folder.mkdir(parents=True, exist_ok=True)
+            window.grabWindow().save(str(folder / (section + '.png')))
+        backend.setMode('translation')
+        wait(80)
+
         backend.editor.saved_revision = backend.editor.revision
         backend.preference('theme', 'dark')
         wait(80)

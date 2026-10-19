@@ -5,6 +5,7 @@ Qt retains ownership of its content view, focus, geometry and event handling.
 from ctypes import c_void_p
 import logging
 import os
+from pathlib import Path
 import sys
 
 from PySide6.QtCore import QObject, Property, Signal
@@ -17,6 +18,7 @@ if sys.platform == 'darwin':
     from AppKit import (NSApplication, NSAppearance, NSAppearanceNameAqua, NSAppearanceNameDarkAqua,
                         NSColor, NSColorSpace, NSImage, NSImageSymbolConfiguration, NSFont, NSFontWeightRegular,
                         NSControlSizeRegular, NSSegmentStyleAutomatic, NSMakeRect, NSSegmentedControl, NSToolbar, NSToolbarItem,
+                        NSPopUpButton, NSMenu, NSMenuItem,
                         NSToolbarDisplayModeIconOnly, NSToolbarFlexibleSpaceItemIdentifier,
                         NSToolbarSpaceItemIdentifier, NSWindowToolbarStyleUnified, NSTitlebarSeparatorStyleNone)
     from Foundation import NSObject, NSSet, NSClassFromString
@@ -32,7 +34,7 @@ if sys.platform == 'darwin':
         def initWithOwner_(self, owner):
             self = objc.super(_SubstanceToolbarDelegate, self).init()
             if self is not None:
-                self.owner, self.items, self.mode_control = owner, {}, None
+                self.owner, self.items, self.mode_control, self.recent_control = owner, {}, None, None
             return self
 
         def toolbarAllowedItemIdentifiers_(self, _toolbar):
@@ -47,20 +49,33 @@ if sys.platform == 'darwin':
         def toolbar_itemForItemIdentifier_willBeInsertedIntoToolbar_(self, _toolbar, identifier, _insert):
             key = str(identifier)
             item = NSToolbarItem.alloc().initWithItemIdentifier_(identifier)
-            if key == self.owner.MODE:
-                item.setLabel_('Режим редактора')
-                item.setPaletteLabel_('Режим редактора')
+            if key == self.owner.RECENTS:
+                item.setLabel_('Недавние проекты')
+                item.setPaletteLabel_('Недавние проекты')
+                item.setToolTip_('Открыть недавний проект или файл субтитров')
+                item.setVisibilityPriority_(1000)
+                control = NSPopUpButton.alloc().initWithFrame_pullsDown_(NSMakeRect(0, 0, 0, 0), True)
+                control.setControlSize_(NSControlSizeRegular)
+                control.setFont_(NSFont.systemFontOfSize_(13))
+                control.setAccessibilityLabel_('Недавние проекты')
+                self.owner._populate_recents(control, self)
+                item.setView_(control)
+                self.recent_control = control
+            elif key == self.owner.MODE:
+                item.setLabel_('Раздел работы')
+                item.setPaletteLabel_('Раздел работы')
                 item.setVisibilityPriority_(1000)
                 control = NSSegmentedControl.alloc().initWithFrame_(NSMakeRect(0, 0, 0, 0))
                 control.setControlSize_(NSControlSizeRegular)
                 control.setSegmentStyle_(NSSegmentStyleAutomatic)
                 control.setFont_(NSFont.systemFontOfSize_(13))
-                control.setSegmentCount_(2)
-                for index, label in enumerate(('Тайминг', 'Перевод')):
+                control.setAccessibilityLabel_('Раздел работы')
+                control.setSegmentCount_(len(self.owner.backend.SECTIONS))
+                for index, (_key, label) in enumerate(self.owner.backend.SECTIONS):
                     control.setLabel_forSegment_(label, index)
-                    control.setWidth_forSegment_(92, index)
+                    control.setWidth_forSegment_(100 if index == 0 else 88 if index < 3 else 60, index)
                 control.sizeToFit()
-                control.setSelectedSegment_(int(self.owner.backend.mode == 'translation'))
+                control.setSelectedSegment_(self.owner.backend.sectionKeys.index(self.owner.backend.section))
                 control.setTarget_(self)
                 control.setAction_('modeChanged:')
                 item.setView_(control)
@@ -86,9 +101,15 @@ if sys.platform == 'darwin':
             self.owner.perform(str(sender.itemIdentifier()))
 
         def modeChanged_(self, sender):
-            self.owner.backend.setMode('translation' if sender.selectedSegment() else 'timing')
+            index = sender.selectedSegment()
+            if 0 <= index < len(self.owner.backend.SECTIONS):
+                self.owner.backend.setSection(self.owner.backend.sectionKeys[index])
             # Invalid pending time can reject the change; restore the actual mode.
             self.owner.sync()
+
+        def openRecent_(self, sender):
+            if not self.owner.backend.busy:
+                self.owner.backend.openPath(str(sender.representedObject()))
 
         def validateToolbarItem_(self, item):
             return self.owner.enabled(str(item.itemIdentifier()))
@@ -100,6 +121,7 @@ class MacOSIntegration(QObject):
     sidebarRequested = Signal()
     settingsRequested = Signal()
     MODE = 'substance.mode'
+    RECENTS = 'substance.recents'
     SIDEBAR = 'substance.sidebar'
     ACTIONS = {
         SIDEBAR: ('Боковая панель', 'sidebar.left', None),
@@ -118,7 +140,7 @@ class MacOSIntegration(QObject):
         'substance.align': ('Уточнить тайминг по речи…', 'waveform.badge.magnifyingglass', 'openAlignment'),
         'substance.point-sync': ('Точечная синхронизация…', 'point.topleft.down.to.point.bottomright.curvepath', 'openPointSync'),
         'substance.time-shift': ('Сдвиг времени…', 'arrow.left.and.right', 'openShift'),
-        'substance.scenes': ('Найти смены планов…', 'film.stack', 'openScenes'),
+        'substance.scenes': ('Найти смены планов…', 'rectangle.split.2x1', 'openScenes'),
         'substance.settings': ('Настройки…', 'gearshape', None),
         'substance.export': ('Экспорт…', 'square.and.arrow.up', 'exportDialog'),
     }
@@ -130,6 +152,7 @@ class MacOSIntegration(QObject):
         self._active = False
         self._content_pointer = self._parent_pointer = 0
         self._palette = {}
+        self._recent_paths = None
         backend.changed.connect(self.sync)
         backend.currentChanged.connect(self.sync)
         backend.preferencesChanged.connect(self.sync_appearance)
@@ -182,19 +205,19 @@ class MacOSIntegration(QObject):
     @property
     def identifiers(self):
         if sys.platform != 'darwin':
-            return list(self.ACTIONS) + [self.MODE]
-        return list(self.ACTIONS) + [self.MODE, NSToolbarFlexibleSpaceItemIdentifier, NSToolbarSpaceItemIdentifier]
+            return list(self.ACTIONS) + [self.MODE, self.RECENTS]
+        return list(self.ACTIONS) + [self.MODE, self.RECENTS, NSToolbarFlexibleSpaceItemIdentifier, NSToolbarSpaceItemIdentifier]
 
     @property
     def default_identifiers(self):
         if sys.platform != 'darwin':
             return list(self.ACTIONS) + [self.MODE]
         space, flexible = NSToolbarSpaceItemIdentifier, NSToolbarFlexibleSpaceItemIdentifier
-        return [self.SIDEBAR, flexible, self.MODE, flexible,
+        return [self.SIDEBAR, flexible, self.RECENTS, self.MODE, flexible,
                 'substance.new', 'substance.open', 'substance.save', space,
                 'substance.undo', 'substance.redo', space,
                 'substance.media', 'substance.transcribe', 'substance.portraits', space,
-                'substance.checks', 'substance.reflow', 'substance.align', 'substance.point-sync', 'substance.time-shift', 'substance.scenes',
+                'substance.scenes', 'substance.checks', 'substance.reflow', 'substance.align', 'substance.point-sync', 'substance.time-shift',
                 space, 'substance.export', 'substance.settings']
 
     def configure(self, window):
@@ -209,7 +232,7 @@ class MacOSIntegration(QObject):
             self._content_pointer = int(objc.pyobjc_id(ns_window.contentView()))
             self._parent_pointer = int(objc.pyobjc_id(view.superview()))
             # A new layout identifier avoids restoring the previous default order.
-            toolbar = NSToolbar.alloc().initWithIdentifier_('dev.scrapdnb.substance.toolbar.v8')
+            toolbar = NSToolbar.alloc().initWithIdentifier_('dev.scrapdnb.substance.toolbar.v10')
             delegate = _SubstanceToolbarDelegate.alloc().initWithOwner_(self)
             toolbar.setDelegate_(delegate)
             toolbar.setDisplayMode_(NSToolbarDisplayModeIconOnly)
@@ -240,7 +263,7 @@ class MacOSIntegration(QObject):
             return self.backend.count > 0 and not self.backend.busy
         if key in ('substance.transcribe', 'substance.portraits'):
             return not self.backend.busy
-        if key in ('substance.new', 'substance.open') or key == self.MODE:
+        if key in ('substance.new', 'substance.open', self.RECENTS) or key == self.MODE:
             return not self.backend.busy
         if key == 'substance.undo':
             return self.backend.canUndo or self.backend.dirty
@@ -266,11 +289,38 @@ class MacOSIntegration(QObject):
             return
         control = self._delegate.mode_control
         if control is not None:
-            control.setSelectedSegment_(int(self.backend.mode == 'translation'))
+            control.setSelectedSegment_(self.backend.sectionKeys.index(self.backend.section))
             control.setEnabled_(not self.backend.busy)
+        recent_control = self._delegate.recent_control
+        if recent_control is not None:
+            if tuple(self.backend.recentFiles) != self._recent_paths:
+                self._populate_recents(recent_control, self._delegate)
+            recent_control.setEnabled_(not self.backend.busy)
         # Include overflow items, which AppKit does not validate automatically.
         for key, item in self._delegate.items.items():
             item.setEnabled_(self.enabled(key))
+
+    def _populate_recents(self, control, delegate):
+        paths = tuple(self.backend.recentFiles)
+        menu = NSMenu.alloc().initWithTitle_('Недавние проекты')
+        menu.setAutoenablesItems_(False)
+        menu.addItem_(NSMenuItem.alloc().initWithTitle_action_keyEquivalent_('Недавние проекты', None, ''))
+        names = [Path(path).name for path in paths]
+        for path, name in zip(paths, names):
+            title = name if names.count(name) == 1 else f'{name} — {Path(path).parent}'
+            row = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(title, 'openRecent:', '')
+            row.setTarget_(delegate)
+            row.setRepresentedObject_(path)
+            row.setToolTip_(path)
+            menu.addItem_(row)
+        if not paths:
+            row = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_('Пока нет недавних проектов', None, '')
+            row.setEnabled_(False)
+            menu.addItem_(row)
+        control.setMenu_(menu)
+        control.setTitle_('Недавние проекты')
+        control.sizeToFit()
+        self._recent_paths = paths
 
     def sync_appearance(self):
         if self._window is None:

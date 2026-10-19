@@ -127,12 +127,4 @@ Item {
             }
         }
     }
-    WheelHandler {
-        acceptedModifiers: Qt.ControlModifier
-        onWheel: event => { wave.zoom(event.angleDelta.y > 0 ? 0.8 : 1.25); event.accepted = true }
-    }
-    WheelHandler {
-        acceptedModifiers: Qt.ShiftModifier
-        onWheel: event => { wave.scrollTime(Math.round(-event.angleDelta.y / 120 * tracks.span / 8)); event.accepted = true }
-    }
 }

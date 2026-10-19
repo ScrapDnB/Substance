@@ -148,7 +148,7 @@ class ToolsController(QObject):
     def stale(self):
         return self._snapshot is not None and (self._options_stale or self._editor is not self.backend.editor
             or self._snapshot != self.backend.editor.document
-            or (self._kind in ('align', 'scenes') and self._media_context != self._context()))
+            or (self._kind in ('align', 'forced', 'retime', 'scenes') and self._media_context != self._context()))
 
     @Slot()
     def invalidate(self):
@@ -218,13 +218,53 @@ class ToolsController(QObject):
 
     def _context(self):
         media = self.backend.media_controller
-        return media.path, media.activeAudio
+        try:
+            stat = Path(media.path).stat() if media.path else None
+            stamp = (stat.st_size, stat.st_mtime_ns) if stat else None
+        except OSError:
+            stamp = None
+        return media.path, media.activeAudio, stamp
+
+    @Property('QVariantMap', notify=changed)
+    def timingPresets(self):
+        defaults = {'Мягкая обработка': {'padding': True, 'lead': 80, 'tail': 120, 'bridge': True, 'bridgeGap': 80, 'bias': 100, 'protectOverlap': True},
+                    'Только округление к кадрам': {'padding': False, 'bridge': False, 'snapCuts': False, 'frames': True, 'protectOverlap': True}}
+        try:
+            saved = json.loads(self.backend.settings.value('timing/processingPresets', '{}'))
+            if isinstance(saved, dict):
+                defaults.update({k: v for k, v in saved.items() if isinstance(v, dict)})
+        except (ValueError, TypeError):
+            pass
+        return defaults
+
+    @Slot(str, 'QVariantMap')
+    def saveTimingPreset(self, name, values):
+        name = name.strip()
+        if not name or len(name) > 100:
+            self._status = 'Введите название профиля до 100 символов.'
+        else:
+            values = dict(values)
+            saved = dict(self.timingPresets)
+            saved[name] = values
+            self.backend.settings.setValue('timing/processingPresets', json.dumps(saved, ensure_ascii=False))
+            self._status = 'Профиль обработки сохранён.'
+        self.changed.emit()
 
     @Slot(str, 'QVariantMap')
     def analyze(self, kind, options):
         b = self.backend
         if self.busy or b.busy or not b.flush() or not b.flushCard():
             return
+        options = dict(options)
+        if kind == 'checks':
+            if options.get('profile'):
+                from .quality_profiles import validate_profile
+                options.update(validate_profile(options['profile']))
+            else:
+                for name in ('readingSpeed', 'lineLength', 'lineCount', 'overlaps', 'lineCountLimit'):
+                    options[name] = b.reviewSettings[name]
+            options.setdefault('cps', b.cpsLimit)
+            options.setdefault('width', b.lineLimit)
         try:
             self._kind = kind
             self._error = False
@@ -247,6 +287,30 @@ class ToolsController(QObject):
                 self._proposals = plan(self._snapshot, indices, kind, options, b.mode == 'translation')
                 self._status = f'Найдено предложений и замечаний: {len(self._proposals)}'
                 self._analysis_ready = True
+            elif kind == 'retime':
+                from .timing_processing import process_timing
+                if options.get('snapCuts') and not b.media_controller.shot_changes:
+                    raise ValueError('Сначала найдите смены планов в меню «Медиа» или выключите привязку к склейкам.')
+                self._proposals = process_timing(self._snapshot, indices, options,
+                    cuts=b.media_controller.shot_changes, frame_times=b.frames.times)
+                self._analysis_ready = True
+                self._status = f'Предложений и замечаний: {len(self._proposals)}. Сравните время и прослушайте результат.'
+            elif kind == 'forced':
+                from .forced_alignment import MODEL_BY_ID as CTC_MODELS, ForcedAlignmentJob
+                from .timecode import parse_time
+                model = CTC_MODELS.get(options.get('model', 'ru'))
+                if not model or b.alignment_models.busy:
+                    raise ValueError('Дождитесь загрузки модели выравнивания.')
+                if not b.media_controller.path:
+                    raise ValueError('Откройте видео или аудио кнопкой «Подключить медиа».')
+                start = parse_time(str(options.get('start', '00:00:00.000')))
+                end = parse_time(str(options.get('end', '')))
+                if not 0 <= start < end <= b.media_controller.duration:
+                    raise ValueError('Укажите начало и конец диапазона внутри открытого медиа.')
+                task = ForcedAlignmentJob(self._snapshot, indices, b.media_controller.path,
+                    b.media_controller.activeAudio, model, b.alignment_models.directory/model.filename,
+                    start, end, original=bool(options.get('original', True)))
+                self._start(task)
             elif kind == 'scenes':
                 if not b.media_controller.path or not b.media_controller.hasVideo:
                     raise ValueError('Откройте видео перед поиском смен планов')
@@ -345,7 +409,7 @@ class ToolsController(QObject):
                 b.editor.transact('Маркеры смен планов', lambda d: d.media.update(shot_changes=record))
                 self._save_markers(record)
             else:
-                if self._kind == 'align' and self._context() != self._media_context:
+                if self._kind in ('align', 'forced', 'retime') and self._context() != self._media_context:
                     raise ValueError('Аудиодорожка изменилась; повторите анализ')
                 replacements = {old: [c.id for c in p.after] for p in self._proposals if p.selected and p.applicable for old in p.ids}
                 apply_plan(b.editor, self._snapshot, self._proposals)

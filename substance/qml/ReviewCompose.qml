@@ -108,17 +108,17 @@ NativeDialog {
         ScrollView {
             visible: dialog.kind === "proposal"
             Layout.fillWidth: true; Layout.fillHeight: true
-            DialogTextArea { id: replacement; objectName: "proposedText"; wrapMode: TextEdit.Wrap; selectByMouse: true; textFormat: TextEdit.PlainText; onTextChanged: { if (dialog.visible && backend.onlineSession.active) draftTimer.restart() } }
+            DialogTextArea { id: replacement; objectName: "proposedText"; wrapMode: TextEdit.Wrap; selectByMouse: true; textFormat: TextEdit.PlainText; onTextChanged: { if (dialog.presented && backend.onlineSession.active) draftTimer.restart() } }
         }
         Label { text: dialog.onlineReply ? "Ответ / причина решения" : dialog.kind === "note" ? "Текст заметки" : "Пояснение" }
         ScrollView {
             Layout.fillWidth: true; Layout.fillHeight: dialog.kind === "note"; Layout.preferredHeight: 85
-            DialogTextArea { id: comment; objectName: "reviewComment"; wrapMode: TextEdit.Wrap; selectByMouse: true; textFormat: TextEdit.PlainText; onTextChanged: { if (dialog.visible && backend.onlineSession.active) draftTimer.restart() } }
+            DialogTextArea { id: comment; objectName: "reviewComment"; wrapMode: TextEdit.Wrap; selectByMouse: true; textFormat: TextEdit.PlainText; onTextChanged: { if (dialog.presented && backend.onlineSession.active) draftTimer.restart() } }
         }
         RowLayout {
             Layout.alignment: Qt.AlignRight
-            Button { text: "Удалить черновик"; visible: backend.onlineSession.active; onClicked: { if (dialog.reviewSession.saveDraft({})) { dialog.saved = true; draftTimer.stop(); dialog.close() } } }
-            Button { text: "Отмена"; onClicked: { dialog.storeDraft(); dialog.close() } }
+            Button { text: "Удалить черновик"; visible: backend.onlineSession.active; onClicked: { if (dialog.reviewSession.saveDraft({})) { dialog.saved = true; draftTimer.stop(); dialog.dismiss() } } }
+            Button { text: "Отмена"; onClicked: { dialog.storeDraft(); dialog.dismiss() } }
             Button {
                 objectName: "saveReview"
                 text: dialog.revising && dialog.kind === "proposal" ? "Сохранить пересмотр" : "Сохранить"
@@ -130,7 +130,7 @@ NativeDialog {
                         dialog.storeDraft()
                         ok = dialog.onlineReply ? dialog.reviewSession.respondAt(dialog.entryId, dialog.replyState, comment.text, dialog.baseVersion) : dialog.reviewSession.createAt(dialog.kind, comment.text, replacement.text, dialog.onlineCueId, dialog.baseRevision)
                     } else ok = dialog.entryId ? (dialog.kind === "note" ? backend.editNote(dialog.entryId, comment.text) : backend.rebaseProposal(dialog.entryId, target.model[target.currentIndex].id, replacement.text, comment.text)) : backend.addReview(dialog.kind, comment.text, replacement.text)
-                    if (ok) { dialog.saved = true; draftTimer.stop(); dialog.close() }
+                    if (ok) { dialog.saved = true; draftTimer.stop(); dialog.dismiss() }
                 }
             }
         }

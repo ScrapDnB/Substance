@@ -1,4 +1,5 @@
 from copy import deepcopy
+import gc
 import base64
 import hashlib
 import pytest
@@ -48,6 +49,9 @@ class Client:
 @pytest.fixture
 def backend(tmp_path, monkeypatch):
     app = QApplication.instance() or QApplication([])
+    # Dispose prior QObject cycles before installing the next backend's
+    # event filter; Shiboken can crash when it wraps a receiver during GC.
+    gc.collect()
     monkeypatch.setenv('SUBSTANCE_DATA_DIR', str(tmp_path))
     backend = Backend()
     client = Client()
@@ -309,6 +313,7 @@ def test_qml_video_portrait_saves_with_open_glossary_form(backend, tmp_path):
     import shiboken6
     from PySide6.QtCore import QObject, QPointF, Qt, QUrl, qInstallMessageHandler
     from PySide6.QtQml import QQmlApplicationEngine
+    from PySide6.QtQuickControls2 import QQuickStyle
     from substance import visuals  # registers Substance QML types
     from substance.images import ProjectImageProvider
     from substance.media import ffmpeg_executable, process_options
@@ -324,6 +329,7 @@ def test_qml_video_portrait_saves_with_open_glossary_form(backend, tmp_path):
     assert session.saveDraft(draft)
     messages = []
     previous = qInstallMessageHandler(lambda kind, context, message: messages.append(message))
+    QQuickStyle.setStyle('Fusion')
     engine = QQmlApplicationEngine()
     engine.addImageProvider('project', ProjectImageProvider(backend))
     engine.rootContext().setContextProperty('backend', backend)

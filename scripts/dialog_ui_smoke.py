@@ -117,7 +117,7 @@ def main():
         for theme in ('light', 'dark'):
             b.preference('theme', theme)
             js('settingsDialog.open()')
-            for index, name in enumerate(('appearance', 'sizes', 'timing', 'translation', 'checks', 'document', 'shortcuts')):
+            for index, name in enumerate(('appearance', 'sizes', 'timing', 'translation', 'checks', 'shortcuts', 'language')):
                 window.findChild(QObject, 'settingsNavigation').setProperty('page', index)
                 capture('settings-' + theme + '-' + name, 'settingsDialog')
                 if index == 1:

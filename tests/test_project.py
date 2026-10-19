@@ -165,7 +165,8 @@ def test_project_roundtrip_and_ass_sidecar_excludes_project_data(tmp_path):
     output = tmp_path / 'out.ass'
     save_document(e.document, output)
     sidecar = json.loads(output.with_name('out.ass.substance').read_text(encoding="utf-8"))
-    assert all(k not in sidecar for k in ('reviews', 'characters', 'images', 'review_settings'))
+    assert all(k not in sidecar for k in ('reviews', 'characters', 'images'))
+    assert sidecar['review_settings'] == e.document.review_settings
     assert all(not c['character_id'] for c in sidecar['cues'])
     assert 'Private project note' not in output.read_text(encoding="utf-8")
     assert not load_document(output).reviews

@@ -34,7 +34,7 @@ RowLayout {
             RowLayout {
                 visible: review.controller.rows.length > 0
                 Button { text: "Выбрать все"; enabled: !review.controller.busy; onClicked: review.controller.checkAll(true) }
-                Button { text: "Снять выбор"; enabled: !review.controller.busy; onClicked: review.controller.checkAll(false) }
+                Button { text: "Снять"; enabled: !review.controller.busy; onClicked: review.controller.checkAll(false) }
             }
             ListView {
                 id: resultList
