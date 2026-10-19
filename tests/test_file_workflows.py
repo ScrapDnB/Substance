@@ -109,9 +109,9 @@ def test_profiles_reports_and_batch_preserve_inputs(tmp_path):
 def test_report_escapes_markup_and_spreadsheet_formulas(tmp_path):
     rows=[{'text':'<script>alert(1)</script>', 'reason':'=1+1'}]
     write_report(tmp_path/'report.html',rows)
-    assert '<script>' not in (tmp_path/'report.html').read_text()
+    assert '<script>' not in (tmp_path/'report.html').read_text(encoding='utf-8')
     write_report(tmp_path/'report.csv',rows)
-    assert "'=1+1" in (tmp_path/'report.csv').read_text()
+    assert "'=1+1" in (tmp_path/'report.csv').read_text(encoding='utf-8-sig')
     with pytest.raises(ValueError):
         validate_profile({'minimum':2000,'maximum':1000})
 

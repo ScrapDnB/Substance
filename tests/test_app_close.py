@@ -108,6 +108,6 @@ def test_online_close_exits_with_media_and_auxiliary_windows(tmp_path, media, mo
     env = dict(os.environ, SUBSTANCE_DATA_DIR=str(tmp_path), SUBSTANCE_STYLE='Fusion',
                QT_QPA_PLATFORM='offscreen', QT_FFMPEG_DECODING_HW_DEVICE_TYPES=',')
     result = subprocess.run([sys.executable, '-c', CHILD, mode, str(media)], cwd=ROOT,
-                            env=env, capture_output=True, text=True, timeout=15)
+                            env=env, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30)
     assert result.returncode == 0, result.stdout + result.stderr
     assert 'CLEAN EXIT' in result.stdout

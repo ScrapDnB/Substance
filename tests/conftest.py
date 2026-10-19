@@ -2,6 +2,9 @@
 import os
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+# Avoid Python-painted render callbacks contending for the GIL in headless tests.
+if os.environ["QT_QPA_PLATFORM"] == "offscreen":
+    os.environ.setdefault("QSG_RENDER_LOOP", "basic")
 # Hosted runners do not provide a reliable hardware video decoder.
 os.environ.setdefault("QT_FFMPEG_DECODING_HW_DEVICE_TYPES", ",")
 

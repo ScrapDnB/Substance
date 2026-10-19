@@ -97,7 +97,7 @@ def test_mode_switch_keeps_playing_video_and_delivering_frames(ui, tmp_path):
     b, window = ui
     video = tmp_path / 'switch.mp4'
     subprocess.run([ffmpeg_executable(), '-nostdin', '-v', 'error', '-f', 'lavfi',
-                    '-i', 'testsrc2=size=320x180:rate=24:duration=4', '-c:v', 'libx264',
+                    '-i', 'testsrc2=size=320x180:rate=24:duration=30', '-c:v', 'libx264',
                     '-y', str(video)], check=True, timeout=30, **process_options())
 
     def wait(ms):
@@ -109,21 +109,27 @@ def test_mode_switch_keeps_playing_video_and_delivering_frames(ui, tmp_path):
     media = b.media_controller
     media.player.setAudioOutput(None)
     b.openMediaPath(str(video))
-    for _ in range(100):
+    # Windows exposes the first frame before the asynchronous priming pause
+    # completes. Wait for that pause before toggling normal playback.
+    for _ in range(250):
         wait(20)
-        if media._sink.videoFrame().isValid():
+        if media._sink.videoFrame().isValid() and not media._priming and not media.playing:
             break
     sink = media._sink
-    assert sink.videoFrame().isValid()
+    assert sink.videoFrame().isValid() and not media._priming and not media.playing
     frames = []
     sink.videoFrameChanged.connect(lambda frame: frames.append(frame.startTime()))
     media.toggle()
-    wait(150)
+    for _ in range(100):
+        wait(20)
+        if media.playing and media.position > 0:
+            break
+    assert media.playing and media.position > 0
     for mode in ('translation', 'timing', 'translation', 'timing'):
         before_position, before_frames = media.position, len(frames)
         b.setMode(mode)
         wait(120)
-        assert media.playing and media.position > before_position
+        assert media.playing and media.position > before_position, (mode, before_position, media.position, media.duration, media.player.mediaStatus(), media.player.errorString(), media._priming)
         assert media._sink is sink and len(frames) > before_frames
         assert not window.grabWindow().isNull()
     media.toggle()
