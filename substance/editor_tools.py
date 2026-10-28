@@ -2,6 +2,7 @@
 from copy import deepcopy
 from dataclasses import dataclass
 from bisect import bisect_left
+from heapq import heappop, heappush
 import difflib
 import re
 
@@ -292,7 +293,7 @@ def normalized(text):
     return ''.join(c.lower().replace('ё', 'е') for c in plain_text(text) if c.isalnum())
 
 
-def align_words(document, indices, words, max_shift=1000, lead=0, tail=120, edges='both', cps=17):
+def align_words(document, indices, words, max_shift=1000, lead=0, tail=120, edges='both', cps=17, original=True):
     """Conservative ordered matching against an independently recognized transcript.
 
     This is ASR-assisted retiming, not acoustic forced alignment. Low-confidence
@@ -303,10 +304,10 @@ def align_words(document, indices, words, max_shift=1000, lead=0, tail=120, edge
         cue = document.cues[i]
         if cue.comment or complex_timing(cue.output_text) or re.search(r'\\(?:pos|move|p[1-9])', cue.output_text):
             continue
-        if cue.translation is not None and sum(c.source_ids == cue.source_ids for c in document.cues) > 1:
+        if original and cue.translation is not None and sum(c.source_ids == cue.source_ids for c in document.cues) > 1:
             proposals.append(Proposal([cue.id], [], 'Разделённый оригинал: требуется ручная проверка', False, False))
             continue
-        target = normalized(cue.original if cue.translation is not None else cue.output_text)
+        target = normalized((cue.original or cue.text) if original else cue.output_text)
         near = [w for w in words if w['end'] >= cue.start - max_shift and w['start'] <= cue.end + max_shift]
         heard, times = '', []
         for word in near:
@@ -357,23 +358,65 @@ def align_words(document, indices, words, max_shift=1000, lead=0, tail=120, edge
     return proposals
 
 
-def lane_layout(cues):
-    """At most three anonymous visual lanes, independent of actors and ASS layers.
+def shared_boundaries(cues):
+    """Unambiguous touching edges, with room for two intervals of at least 10 ms."""
+    starts, ends = {}, {}
+    for index, cue in enumerate(cues):
+        if not cue.comment and cue.start < cue.end:
+            starts.setdefault(cue.start, []).append(index)
+            ends.setdefault(cue.end, []).append(index)
+    joints = []
+    for time, left in ends.items():
+        right = starts.get(time, [])
+        if len(left) == len(right) == 1:
+            minimum, maximum = cues[left[0]].start + 10, cues[right[0]].end - 10
+            if minimum <= maximum:
+                joints.append({'left': left[0], 'right': right[0], 'time': time,
+                               'minimum': minimum, 'maximum': maximum})
+    return joints
 
-    A fourth simultaneous cue shares the earliest-releasing lane. Every cue
-    remains present; translucent overlapping blocks represent dense passages.
+
+def lane_layout(cues):
+    """Pack each connected overlap group into its own anonymous visual lanes.
+
+    Touching intervals belong to separate groups. Lane counts are local to a
+    group, so an isolated cue fills the audio pane regardless of distant overlaps.
+    No simultaneous cues share a lane; actors and ASS layers do not affect it.
     """
     lanes = []
+    active, available, group = [], [], []
+    group_end, lane_count = 0, 0
+
+    def finish_group():
+        for item in group:
+            item['laneCount'] = lane_count
+
     items = [(i, cue) for i, cue in enumerate(cues) if not cue.comment]
+    start_joints, end_joints = {}, {}
+    for joint in shared_boundaries(cues):
+        start_joints[joint['right']] = joint
+        end_joints[joint['left']] = joint
     for index, cue in sorted(items, key=lambda item: (item[1].start, item[1].end, item[0])):
-        lane = next((row for row in lanes if row['end'] <= cue.start), None)
-        if lane is None:
-            if len(lanes) < 3:
-                lane = {'end': 0, 'items': []}
-                lanes.append(lane)
-            else:
-                lane = min(lanes, key=lambda row: row['end'])
-        lane['end'] = max(lane['end'], cue.end)
-        lane['items'].append({'index': index, 'id': cue.id, 'start': cue.start, 'end': cue.end,
-                              'text': plain_text(cue.output_text).replace('\n', ' ')})
-    return [{'items': sorted(row['items'], key=lambda c: (c['start'], -c['end'], c['index']))} for row in lanes]
+        if cue.start >= group_end:
+            finish_group()
+            active, available, group = [], [], []
+            lane_count = 0
+        while active and active[0][0] <= cue.start:
+            _, released = heappop(active)
+            heappush(available, released)
+        if available:
+            lane_index = heappop(available)
+        else:
+            lane_index = lane_count
+            lane_count += 1
+            if lane_index == len(lanes):
+                lanes.append({'items': []})
+        item = {'index': index, 'id': cue.id, 'start': cue.start, 'end': cue.end,
+                'text': plain_text(cue.output_text),
+                'startJoint': start_joints.get(index), 'endJoint': end_joints.get(index)}
+        lanes[lane_index]['items'].append(item)
+        group.append(item)
+        heappush(active, (cue.end, lane_index))
+        group_end = max(cue.end, cue.start) if len(group) == 1 else max(group_end, cue.end)
+    finish_group()
+    return lanes

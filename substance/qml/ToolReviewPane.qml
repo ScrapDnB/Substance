@@ -8,6 +8,8 @@ RowLayout {
     required property var colors
     required property var controller
     property bool timing: false
+    property bool bilingual: false
+    property bool showOriginal: !bilingual
     property string emptyTitle: "Здесь появится результат"
     property string emptyDescription: "Запустите проверку, выберите предложение слева и сравните результат справа."
     readonly property var preview: controller.preview
@@ -81,7 +83,7 @@ RowLayout {
                             Label { text: proposal.modelData.text; textFormat: Text.PlainText; elide: Text.ElideRight; Layout.fillWidth: true; color: review.colors.muted }
                             Label {
                                 Layout.fillWidth: true
-                                text: proposal.modelData.review ? "Прослушайте перед применением" : proposal.modelData.applicable ? "Готово к применению" : "Проверьте вручную"
+                                text: proposal.modelData.uncertain ? "Неоднозначный вариант — можно применить" : proposal.modelData.review ? "Прослушайте перед применением" : proposal.modelData.applicable ? "Готово к применению" : "Проверьте вручную"
                                 color: proposal.modelData.review || !proposal.modelData.applicable ? review.colors.warning : review.colors.muted
                                 wrapMode: Text.Wrap
                                 font.pixelSize: 11
@@ -111,6 +113,7 @@ RowLayout {
             RowLayout {
                 Layout.fillWidth: true
                 Label { text: "3. Проверьте результат"; font.weight: Font.DemiBold; Layout.fillWidth: true }
+                CheckBox { visible: review.bilingual; text: "Исходный блок"; checked: review.showOriginal; onClicked: review.showOriginal = checked }
                 Button { text: "К реплике"; visible: !!review.preview.valid; onClicked: review.controller.locate(review.controller.previewIndex) }
             }
             ScrollView {
@@ -137,12 +140,12 @@ RowLayout {
                         wrapMode: Text.Wrap
                         color: review.colors.muted
                     }
-                    Label { text: "Сейчас"; font.weight: Font.DemiBold; visible: !!review.preview.valid }
-                    SubtitlePreview { Layout.fillWidth: true; colors: review.colors; cues: review.preview.beforeCues || [] }
+                    Label { text: "Сейчас"; font.weight: Font.DemiBold; visible: !!review.preview.valid && review.showOriginal }
+                    SubtitlePreview { visible: review.showOriginal; Layout.fillWidth: true; colors: review.colors; cues: review.preview.beforeCues || []; bilingual: review.bilingual }
                     Waveform {
                         id: beforeWave
                         objectName: "originalTimingPreview"
-                        visible: review.timing && !!review.preview.valid
+                        visible: review.timing && !!review.preview.valid && review.showOriginal
                         Layout.fillWidth: true; Layout.preferredHeight: 64
                         media: backend.media; paletteColors: review.colors
                         start: review.preview.start; end: review.preview.end
@@ -150,7 +153,15 @@ RowLayout {
                         onViewChanged: afterWave.setViewport(viewStart, span)
                     }
                     Label { text: "После применения"; font.weight: Font.DemiBold; visible: !!review.preview.valid }
-                    SubtitlePreview { Layout.fillWidth: true; colors: review.colors; cues: review.preview.afterCues || []; proposed: true }
+                    SubtitlePreview {
+                        Layout.fillWidth: true
+                        colors: review.colors
+                        cues: review.preview.afterCues || []
+                        proposed: true
+                        bilingual: review.bilingual
+                        playable: review.bilingual && review.timing && backend.media.hasMedia && !review.controller.stale
+                        onPlayRequested: index => review.controller.playFragment(review.controller.previewIndex, index)
+                    }
                     Label {
                         Layout.fillWidth: true
                         visible: !!review.preview.valid && !review.preview.applicable
@@ -181,7 +192,7 @@ RowLayout {
                 spacing: 6
                 visible: !!review.preview.valid
                 Button { text: "▶ Сейчас"; enabled: backend.media.hasMedia; onClicked: review.controller.play(review.controller.previewIndex, false) }
-                Button { text: "▶ После"; enabled: backend.media.hasMedia && !!review.preview.applicable; onClicked: review.controller.play(review.controller.previewIndex, true) }
+                Button { objectName: "toolPlayAfter"; text: "▶ После"; enabled: backend.media.hasMedia && !!review.preview.applicable; onClicked: review.controller.play(review.controller.previewIndex, true) }
                 CheckBox {
                     objectName: review.timing ? "alignmentAcceptCurrent" : "toolsAcceptCurrent"
                     text: "Применить"

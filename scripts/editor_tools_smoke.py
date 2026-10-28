@@ -85,7 +85,7 @@ def main():
         assert backend.tools.apply(), backend.tools.status
         backend.undo()
         dialog.close()
-        backend.tools.setDisplayMode('tracks')
+        backend.tools.setDisplayMode('wave')
         backend.media_controller.open(args.audio)
         until(lambda: len(backend.media_controller.peaks) > 0, 15)
         capture(window, 'tracks.png')

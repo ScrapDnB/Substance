@@ -19,7 +19,7 @@ ApplicationWindow {
                                      || assTagsDialog.visible || leadDialog.visible || actorDialog.visible
                                      || onlineConflictDialog.visible || onlineGlossaryDialog.visible || onlineWorkflowDialog.visible || reviewsDialog.visible || reviewCompose.visible || characterDialog.visible || portraitCropDialog.visible
                                      || shiftDialog.visible || autoPortraitsDialog.visible || editorToolsDialog.visible || alignmentDialog.visible
-                                     || transferDialog.visible || timingProcessDialog.visible || scriptTimingDialog.visible || batchDialog.visible || bitmapSubtitleDialog.visible || frameIndexDialog.visible
+                                     || transferDialog.visible || timingProcessDialog.visible || scriptTimingDialog.visible || semanticTimingDialog.visible || batchDialog.visible || bitmapSubtitleDialog.visible || frameIndexDialog.visible
     visible: startupChromeReady
     title: (backend.dirty ? "● " : "") + backend.title + " — Substance"
     readonly property real uiScale: backend.appearance.general.uiScale / 100
@@ -91,6 +91,7 @@ ApplicationWindow {
         case "hardsub": backend.openHardsub(); break
         case "bitmap": backend.bitmapSubtitles.open(); break
         case "forced": backend.openScriptTiming(); break
+        case "semantic": backend.openSemanticTiming(); break
         case "scenes": backend.openScenes(); break
         case "frames": backend.frameIndex.open(); break
         case "compare": backend.fileTransfer.open("compare"); break
@@ -121,6 +122,7 @@ ApplicationWindow {
         transferDialog.dismiss()
         timingProcessDialog.dismiss()
         scriptTimingDialog.dismiss()
+        semanticTimingDialog.dismiss()
         batchDialog.dismiss()
         bitmapSubtitleDialog.dismiss()
         frameIndexDialog.dismiss()
@@ -165,6 +167,20 @@ ApplicationWindow {
     Action { id: exportAction; text: "Экспорт…"; shortcut: backend.shortcuts.export; onTriggered: backend.exportDialog(false) }
     Action { id: undoAction; text: "Отменить"; shortcut: backend.shortcuts.undo; enabled: backend.canUndo || backend.dirty; onTriggered: backend.undo() }
     Action { id: redoAction; text: "Повторить"; shortcut: backend.shortcuts.redo; enabled: backend.canRedo; onTriggered: backend.redo() }
+    readonly property var clipboardTarget: {
+        let item = activeFocusItem
+        if (item && typeof item.copy === "function" && typeof item.paste === "function") return item
+        return !window.toolSection && backend.current.exists ? cueEditor.textEditor : null
+    }
+    function editClipboard(command) {
+        let target = clipboardTarget
+        if (!target || (command !== "copy" && target.readOnly)) return
+        target.forceActiveFocus()
+        target[command]()
+    }
+    Action { id: cutTextAction; objectName: "cutTextAction"; text: "Вырезать"; shortcut: StandardKey.Cut; enabled: !window.modalOpen && window.clipboardTarget !== null && !window.clipboardTarget.readOnly && window.clipboardTarget.selectedText.length > 0; onTriggered: window.editClipboard("cut") }
+    Action { id: copyTextAction; objectName: "copyTextAction"; text: "Копировать"; shortcut: StandardKey.Copy; enabled: !window.modalOpen && window.clipboardTarget !== null && window.clipboardTarget.selectedText.length > 0; onTriggered: window.editClipboard("copy") }
+    Action { id: pasteTextAction; objectName: "pasteTextAction"; text: "Вставить"; shortcut: StandardKey.Paste; enabled: !window.modalOpen && window.clipboardTarget !== null && !window.clipboardTarget.readOnly && window.clipboardTarget.canPaste; onTriggered: window.editClipboard("paste") }
     Action { id: findAction; text: "Найти…"; shortcut: backend.shortcuts.find; onTriggered: { findDialog.replaceMode = false; findDialog.open(); findInput.forceActiveFocus() } }
     Action { id: replaceAction; text: "Найти и заменить…"; shortcut: backend.shortcuts.replace; onTriggered: { findDialog.replaceMode = true; findDialog.open(); findInput.forceActiveFocus() } }
     Action { id: applyAction; text: "Применить / следующая реплика"; shortcut: backend.shortcuts.apply; enabled: backend.current.exists; onTriggered: backend.apply(backend.mode === "translation") }
@@ -187,7 +203,7 @@ ApplicationWindow {
     Action { id: pointSyncAction; text: "Точечная синхронизация…"; enabled: backend.count > 0 && !backend.busy; onTriggered: backend.openPointSync() }
     Action { id: assignCharacterAction; text: "Назначить персонажа…"; shortcut: backend.shortcuts.assignCharacter; enabled: backend.current.exists && !backend.busy && !window.modalOpen; onTriggered: { if (backend.flush()) actorDialog.open() } }
     Action { id: quitAction; text: "Выйти из Substance"; shortcut: StandardKey.Quit; onTriggered: window.close() }
-    Shortcut { sequence: "Space"; enabled: backend.media.hasMedia && !window.textInputFocused() && !transferDialog.visible; onActivated: backend.media.toggle() }
+    Shortcut { sequence: "Space"; enabled: backend.media.hasMedia && !window.textInputFocused() && !window.modalOpen; onActivated: backend.media.toggle() }
 
     function textInputFocused() {
         let item = activeFocusItem
@@ -229,6 +245,10 @@ ApplicationWindow {
             title: "Правка"
             MenuItem { action: undoAction }
             MenuItem { action: redoAction }
+            MenuSeparator { }
+            MenuItem { action: cutTextAction }
+            MenuItem { action: copyTextAction }
+            MenuItem { action: pasteTextAction }
             MenuSeparator { }
             MenuItem { action: findAction }
             MenuItem { action: replaceAction }
@@ -296,6 +316,7 @@ ApplicationWindow {
             MenuItem { objectName: "timingProcessMenuItem"; text: "Обработать интервалы…"; enabled: backend.count > 0 && !backend.busy; onTriggered: backend.openTimingProcessor() }
             MenuItem { text: "Уточнить по речи…"; enabled: backend.count > 0 && !backend.busy; onTriggered: backend.openAlignment() }
             MenuItem { objectName: "scriptTimingMenuItem"; text: "Тайминг готового сценария…"; enabled: !backend.busy; onTriggered: backend.openScriptTiming() }
+            MenuItem { objectName: "semanticTimingMenuItem"; text: "Сопоставить по смыслу и разбить…"; enabled: !backend.busy && !backend.onlineSession.active; onTriggered: backend.openSemanticTiming() }
         }
         Menu {
             id: qualityMenu
@@ -513,6 +534,7 @@ ApplicationWindow {
                     {key: "hardsub", title: "Распознать хардсаб", detail: "Текст, вшитый в изображение"},
                     {key: "bitmap", title: "PGS / VobSub", detail: "Распознать графическую дорожку"},
                     {key: "forced", title: "Тайминг сценария", detail: "Привязать готовый текст к речи"},
+                    {key: "semantic", title: "Сопоставить по смыслу", detail: "Другой язык и разбиение длинных строк"},
                     {key: "scenes", title: "Смены планов", detail: "Найти и проверить склейки"},
                     {key: "frames", title: "Точные времена кадров", detail: "Индекс кадров, включая VFR"},
                     {key: "compare", title: "Сравнить файлы", detail: "Перенести текст, время и оформление", document: true},
@@ -682,6 +704,7 @@ ApplicationWindow {
         colors: window.colors
     }
     CueEditor {
+        id: cueEditor
         parent: backend.mode === "timing" ? timingEditor : translationEditor
         objectName: backend.mode === "timing" ? "timingEditor" : "translationEditor"
         anchors.fill: parent
@@ -804,6 +827,7 @@ ApplicationWindow {
     TransferDialog { id: transferDialog; colors: window.colors }
     TimingProcessDialog { id: timingProcessDialog; colors: window.colors }
     ScriptTimingDialog { id: scriptTimingDialog; colors: window.colors }
+    SemanticTimingDialog { id: semanticTimingDialog; colors: window.colors }
     BatchDialog { id: batchDialog; colors: window.colors }
     BitmapSubtitleDialog { id: bitmapSubtitleDialog; colors: window.colors }
     FrameIndexDialog { id: frameIndexDialog; colors: window.colors }
@@ -819,10 +843,12 @@ ApplicationWindow {
             if (kind !== "align") alignmentDialog.dismiss()
             if (kind !== "retime") timingProcessDialog.dismiss()
             if (kind !== "forced") scriptTimingDialog.dismiss()
-            if (["align", "retime", "forced"].indexOf(kind) >= 0) editorToolsDialog.dismiss()
+            if (kind !== "semantic") semanticTimingDialog.dismiss()
+            if (["align", "retime", "forced", "semantic"].indexOf(kind) >= 0) editorToolsDialog.dismiss()
             if (kind === "align") window.presentTool(alignmentDialog, "align")
             else if (kind === "retime") window.presentTool(timingProcessDialog, "retime")
             else if (kind === "forced") { if (scriptTimingDialog.visible) window.presentTool(scriptTimingDialog, "forced"); else { window.mountTool(scriptTimingDialog, "forced"); scriptTimingDialog.prepare() } }
+            else if (kind === "semantic") { if (semanticTimingDialog.visible) window.presentTool(semanticTimingDialog, "semantic"); else { window.mountTool(semanticTimingDialog, "semantic"); semanticTimingDialog.prepare() } }
             else { window.mountTool(editorToolsDialog, kind); editorToolsDialog.prepare(kind) }
         }
     }

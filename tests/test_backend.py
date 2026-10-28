@@ -2,16 +2,18 @@ import os
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from pathlib import Path
+from copy import deepcopy
 import pytest
 import shiboken6
 from PySide6.QtCore import QObject, QUrl, Qt, QPointF, qInstallMessageHandler
+from PySide6.QtGui import QKeySequence
 from PySide6.QtQml import QQmlApplicationEngine
 from PySide6.QtQuickControls2 import QQuickStyle
 from PySide6.QtWidgets import QApplication, QMessageBox
 from PySide6.QtTest import QTest
 
 from substance.backend import Backend
-from substance.document import load_document
+from substance.document import load_document, save_document
 from substance import visuals
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -164,7 +166,7 @@ def test_qml_typing_keyboard_navigation_and_modes(app, backend):
         wave = window.findChild(QObject, 'audioWaveform')
         assert wave is not None
         selector = window.findChild(QObject, 'audioDisplaySelector')
-        spectrum = selector.mapToScene(QPointF(selector.width() * .5, selector.height() / 2)).toPoint()
+        spectrum = selector.mapToScene(QPointF(selector.width() * .75, selector.height() / 2)).toPoint()
         QTest.mouseClick(window, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, spectrum)
         assert wave.spectral and selector.property('currentIndex') == 1
         QTest.keyClick(window, Qt.Key.Key_Left)
@@ -177,8 +179,21 @@ def test_qml_typing_keyboard_navigation_and_modes(app, backend):
         wave.rangeRequested.emit(1200, 3400)
         assert backend.editor.document.cues[0].start == 1200
         assert backend.editor.document.cues[0].end == 3400
-        wave.setProperty('snap', False)
-        begin = wave.mapToScene(QPointF(wave._x(wave.start), wave.height() / 2)).toPoint()
+        tracks = window.findChild(QObject, 'timingAudio').findChild(QObject, 'subtitleTracks')
+        tracks.setProperty('snap', False)
+        QTest.qWait(30)
+
+        def track_handle(item):
+            if item.objectName() == 'trackDrag_0':
+                return item
+            for child in item.childItems():
+                found = track_handle(child)
+                if found is not None:
+                    return found
+
+        handle = track_handle(tracks)
+        assert handle is not None
+        begin = handle.mapToScene(QPointF(2, handle.height() / 2)).toPoint()
         finish = begin + QPointF(50, 0).toPoint()
         previous_start = wave.start
         QTest.mousePress(window, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, begin)
@@ -208,3 +223,62 @@ def test_created_text_becomes_original_until_first_translation():
     editor.split(0, 3, 1000, translation_mode=True)
     editor.merge([0, 1])
     assert editor.document.cues[0].original == 'Final original'
+
+
+@pytest.mark.parametrize('mode', ['timing', 'translation'])
+@pytest.mark.parametrize('focus', ['subtitleEditor', 'startField'])
+@pytest.mark.parametrize('custom_keys', [False, True])
+def test_split_undo_redo_from_focused_text_field(app, backend, mode, focus, custom_keys):
+    # Local DubbingManager handoff opens an autonomous .substance snapshot.
+    path = backend.data_dir / 'DubbingManager.substance'
+    save_document(backend.editor.document, path)
+    backend._set_document(load_document(path), str(path))
+    assert not backend.online.active
+    backend.setMode(mode)
+    if custom_keys:
+        assert backend.setShortcut('undo', 'Ctrl+Alt+Z')
+        assert backend.setShortcut('redo', 'Ctrl+Alt+Y')
+    engine = QQmlApplicationEngine()
+    engine.rootContext().setContextProperty('backend', backend)
+    try:
+        engine.load(QUrl.fromLocalFile(str(ROOT / 'substance/qml/Main.qml')))
+        window = engine.rootObjects()[0]
+        window.requestActivate()
+        QTest.qWait(80)
+        field = window.findChild(QObject, 'subtitleEditor')
+        field.setProperty('text', 'Hello world')
+        assert backend.flush()
+        before = deepcopy(backend.editor.document)
+        field.setProperty('cursorPosition', 5)
+        field.forceActiveFocus()
+
+        def press(action):
+            combination = QKeySequence(backend.shortcuts[action])[0]
+            QTest.keyClick(window, combination.key(), combination.keyboardModifiers())
+            QTest.qWait(20)
+
+        press('split')
+        after = deepcopy(backend.editor.document)
+        assert len(after.cues) == len(before.cues) + 1
+        assert field.property('text') == 'Hello'
+        assert field.property('activeFocus')
+        window.findChild(QObject, focus).forceActiveFocus()
+        press('undo')
+        assert backend.editor.document == before
+        assert field.property('text') == 'Hello world'
+        press('redo')
+        assert backend.editor.document == after
+        assert field.property('text') == 'Hello'
+        # A pending edit must undo separately, without hiding the split or
+        # letting TextEdit's local history resurrect an earlier cue value.
+        field.forceActiveFocus()
+        QTest.keyClick(window, Qt.Key_X)
+        assert backend.draft
+        press('undo')
+        assert backend.editor.document == after
+        press('undo')
+        assert backend.editor.document == before
+    finally:
+        if engine.rootObjects():
+            shiboken6.delete(engine.rootObjects()[0])
+        shiboken6.delete(engine)

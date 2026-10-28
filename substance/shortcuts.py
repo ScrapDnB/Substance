@@ -90,6 +90,12 @@ class LayoutShortcuts(QObject):
             if parsed.count() == 1:
                 combination = parsed[0]
                 self.timing_bindings[(int(combination.key()), combination.keyboardModifiers().value)] = command
+        self.history_bindings = {}
+        for name in ('undo', 'redo'):
+            parsed = QKeySequence(self.backend.shortcuts.get(name, ''))
+            if parsed.count() == 1:
+                combination = parsed[0]
+                self.history_bindings[(int(combination.key()), combination.keyboardModifiers().value)] = name
 
     def _capture_focused(self):
         item = self.app.focusWidget()
@@ -115,6 +121,19 @@ class LayoutShortcuts(QObject):
         # QWindow is the actual key-event target. During native activation
         # transitions QApplication.focusWindow() can still refer to the old one.
         window = receiver if isinstance(receiver, QWindow) else self.app.focusWindow()
+        history = self.history_bindings.get((ord(character) if character else event.key(), event.modifiers().value))
+        if history and window is not None and window.objectName() == 'substanceWindow' and not window.property('modalOpen'):
+            item = window.activeFocusItem()
+            while item is not None:
+                if item.property('documentHistoryScope'):
+                    # TextInput/TextEdit accept Undo even when their local
+                    # history is empty after a split/reload. Reserve the key
+                    # before that override so it reaches document history.
+                    if event.type() == QEvent.KeyPress:
+                        getattr(self.backend, history)()
+                    event.accept()
+                    return True
+                item = item.parentItem()
         if command and window is not None and window.objectName() == 'substanceWindow' and window.property('timingShortcutsEnabled'):
             # Reserve these commands before TextInput's cursor/selection keys.
             # This also supports auto-repeat and physical keys in other layouts.

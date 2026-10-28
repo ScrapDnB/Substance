@@ -310,6 +310,10 @@ class Backend(QObject):
     def openScriptTiming(self):
         self.tools.open('forced')
 
+    @Slot()
+    def openSemanticTiming(self):
+        self.tools.open('semantic')
+
     @Property(QObject, constant=True)
     def languageAssistance(self):
         return self.language_assistance
@@ -544,7 +548,13 @@ class Backend(QObject):
     @Property(str, notify=changed)
     def title(self):
         if self.online.active:
-            return self.online.context.get("episode_name", "Онлайн-серия")
+            return self.online.title
+        metadata = self.editor.document.metadata
+        if "dubbing_project_id" in metadata or "dubbing_project_name" in metadata:
+            names = [metadata.get("dubbing_project_name"), metadata.get("title")]
+            title = " — ".join(name.strip() for name in names if isinstance(name, str) and name.strip())
+            if title:
+                return title
         return Path(self.path).name if self.path else "Новые субтитры"
 
     @Property(str, notify=changed)
@@ -1001,7 +1011,6 @@ class Backend(QObject):
         self.model.update_selection()
         self.currentChanged.emit()
         self.changed.emit()
-        self.centerWaveform.emit()
         return True
 
     @Slot()

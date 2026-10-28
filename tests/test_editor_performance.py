@@ -51,6 +51,9 @@ def ui(backend):
 
 def test_mode_switch_reuses_surfaces_sink_and_keeps_drafts_and_undo(ui, monkeypatch):
     b, window = ui
+    # Exercise text-focus restoration with the new per-mode opt-in enabled.
+    for mode in ('timing', 'translation'):
+        b.appearance.setValue(mode, 'editorFocus', True)
     names = ('subtitleEditor', 'subtitleTable', 'videoOutput', 'audioWaveform')
     surfaces = {name: window.findChild(QObject, name) for name in names}
     assert all(surfaces.values())

@@ -106,6 +106,12 @@ def test_other_layout_commands_typing_and_custom_shortcut(tmp_path, monkeypatch)
         before = b.count
         send('в', 2)
         assert b.count == before + 1
+        # Structural edits use document history with a Russian layout too.
+        field.forceActiveFocus()
+        send('я', 6)
+        assert b.count == before
+        send('я', 6, Qt.ControlModifier | Qt.ShiftModifier)
+        assert b.count == before + 1
         before = b.count
         send('х', 33, Qt.ControlModifier | Qt.ShiftModifier)
         assert b.count == before  # Unbound Ctrl+Shift+[ is untouched.

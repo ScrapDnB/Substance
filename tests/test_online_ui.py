@@ -107,6 +107,65 @@ def test_local_files_hide_online_controls_even_with_saved_session(app, tmp_path,
         backend.shutdown()
 
 
+def test_dubbing_snapshot_title_survives_edits_save_and_reopen(app, tmp_path, monkeypatch):
+    monkeypatch.setenv("SUBSTANCE_DATA_DIR", str(tmp_path))
+    backend = Backend()
+    try:
+        document = load_document(ROOT / "substance/resources/example.ass")
+        document.metadata.update(dubbing_project_id="project", dubbing_project_name="Название проекта", title="Серия 03")
+        path = tmp_path / ("88ca54934b144e0d8719725281eab19a.substance")
+        save_document(document, path)
+        backend._set_document(load_document(path), str(path))
+        with window_for(backend) as (window, js):
+            expected = "Название проекта — Серия 03 — Substance"
+            assert window.title() == expected
+            backend.stage("text", "Изменённый текст")
+            assert window.title() == "● " + expected
+            assert backend.save()
+            assert window.title() == expected
+            backend._set_document(load_document(path), str(path))
+            assert window.title() == expected
+            backend.newDocument()
+            assert window.title() == "Новые субтитры — Substance"
+            ordinary = tmp_path / "Обычный проект.substance"
+            # A regular document's metadata title must not replace its filename.
+            document.metadata = {"title": "Название из ASS"}
+            save_document(document, ordinary)
+            backend._set_document(load_document(ordinary), str(ordinary))
+            assert window.title() == "Обычный проект.substance — Substance"
+    finally:
+        backend.shutdown()
+
+
+def test_legacy_dubbing_snapshot_uses_episode_title(app, tmp_path, monkeypatch):
+    monkeypatch.setenv("SUBSTANCE_DATA_DIR", str(tmp_path))
+    backend = Backend()
+    try:
+        document = load_document(ROOT / "substance/resources/example.ass")
+        document.metadata.update(dubbing_project_id="project", title="Серия 03")
+        backend._set_document(document, str(tmp_path / "random.substance"))
+        assert backend.title == "Серия 03"
+        document.metadata["title"] = "   "
+        assert backend.title == "random.substance"
+    finally:
+        backend.shutdown()
+
+
+def test_online_title_uses_current_project_and_episode_names(app, online_backend):
+    backend = online_backend
+    online = backend.online
+    with window_for(backend) as (window, js):
+        assert window.title() == "Test series — Substance"
+        online._update_project({"name": "Проект", "episodes": [{"id": "episode", "name": "Серия 03"}]})
+        backend.changed.emit()
+        assert window.title() == "Проект — Серия 03 — Substance"
+        online._update_project({"name": "Новое название", "episodes": [{"id": "episode", "name": "Финал"}]})
+        backend.changed.emit()
+        assert window.title() == "Новое название — Финал — Substance"
+        backend.newDocument()
+        assert window.title() == "Новые субтитры — Substance"
+
+
 def test_remote_controls_survive_network_failure_and_close_on_disconnect(app, online_backend, monkeypatch):
     backend = online_backend
     errors = []

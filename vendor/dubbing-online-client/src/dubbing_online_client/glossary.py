@@ -59,7 +59,7 @@ class RemoteGlossary:
             self._persist(state)
 
     def enqueue(self, proposal=False, *, draft=None):
-        """Queue a form or an independent change without replacing the open form."""
+        """Queue an independent portrait change without replacing an open form."""
         with self._lock:
             if self.pending:
                 raise ValueError("Сначала подтвердите сохранённую операцию глоссария")

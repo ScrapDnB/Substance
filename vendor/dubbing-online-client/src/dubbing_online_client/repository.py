@@ -38,10 +38,48 @@ def atomic_json(path, value):
             os.unlink(temporary)
 
 
+def legacy_journals(directory, context, canonical_path=None):
+    """Inspect recoverable old loopback drafts without changing any files."""
+    directory = Path(directory)
+    from urllib.parse import urlsplit
+    candidates = []
+    for path in directory.glob("*/journal.json"):
+        if path == canonical_path or (path.parent / "migrated-to.json").exists():
+            continue
+        matched = False
+        try:
+            journal = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(journal, dict):
+                continue
+            identity = journal.get("context", [])
+            if len(identity) != 4 or identity[1:] != context[1:]:
+                continue
+            if urlsplit(identity[0]).hostname not in ("127.0.0.1", "localhost", "::1"):
+                continue
+            matched = True
+            states = {"journal.json": journal}
+            for name in ("reviews.json", "glossary.json"):
+                other = path.with_name(name)
+                if other.exists():
+                    states[name] = json.loads(other.read_text(encoding="utf-8"))
+            dirty = journal.get("pending") or journal.get("draft") != journal.get("confirmed")
+            dirty = dirty or any(s.get("pending") or s.get("draft") for name, s in states.items() if name != "journal.json")
+            if dirty:
+                candidates.append((path, states))
+        except (ValueError, OSError, TypeError, AttributeError) as exc:
+            if matched:
+                raise ValueError("Не удалось прочитать прежний SSH-черновик. Исходные файлы сохранены в " + str(path.parent)) from exc
+            # An unreadable unrelated journal must never be overwritten.
+            continue
+    return candidates
+
+
 class RemoteDocumentRepository:
-    def __init__(self, client, account_id, project_id, episode_id, directory):
+    def __init__(self, client, account_id, project_id, episode_id, directory, *, server_identity=None,
+                 migrate_loopback=False, on_close=None, legacy_journal=None):
         self.client = client
-        self.context = [client.url, account_id, project_id, episode_id]
+        self._on_close = on_close
+        self.context = [server_identity or client.url, account_id, project_id, episode_id]
         if not all(isinstance(v, str) and v for v in self.context):
             raise ValueError("Invalid remote document identity")
         import re
@@ -73,6 +111,8 @@ class RemoteDocumentRepository:
             self._file_lock.close()
             raise ValueError("Эта серия уже открыта в другом окне Substance") from None
         try:
+            if migrate_loopback and server_identity:
+                self._migrate_loopback(Path(directory), selected=legacy_journal)
             if self.path.exists():
                 state = json.loads(self.path.read_text(encoding="utf-8"))
                 if state.get("version") != 1 or state.get("context") != self.context:
@@ -97,6 +137,63 @@ class RemoteDocumentRepository:
         except BaseException:
             self.close()
             raise
+
+    def _migrate_loopback(self, directory, *, selected=None):
+        """Keep old files as recovery copies; move every outbox as one unit.
+
+        Old clients did not store the SSH host. Match all three immutable IDs,
+        require a loopback URL, and refuse to guess between distinct drafts.
+        The old journal lock also protects review and glossary operations.
+        """
+        candidates = legacy_journals(directory, self.context, self.path)
+        recovery = self.path.with_name("legacy-recovery.json")
+        if recovery.exists() and selected is None:
+            saved = json.loads(recovery.read_text(encoding="utf-8"))
+            if saved.get("context") != self.context:
+                raise ValueError("Не совпал контекст сохранённых копий черновика")
+            alternatives = set(saved.get("alternatives", []))
+            candidates = [(path, states) for path, states in candidates if str(path) not in alternatives]
+        alternatives = []
+        if selected is not None:
+            matches = [(path, states) for path, states in candidates if path.resolve() == Path(selected).resolve()]
+            if len(matches) != 1:
+                raise ValueError("Выбранный прежний черновик больше недоступен")
+            alternatives = [str(path) for path, _ in candidates if path != matches[0][0]]
+            candidates = matches
+        if len(candidates) > 1:
+            raise ValueError("Найдено несколько прежних SSH-черновиков этой серии. "
+                             "Они сохранены в " + str(directory) + "; выберите черновик для восстановления перед открытием серии.")
+        if not candidates:
+            return
+        path, states = candidates[0]
+        with open(path.with_suffix(".lock"), "a+b") as lock:
+            try:
+                if os.name == "nt":
+                    import msvcrt
+                    lock.write(b"0"); lock.flush(); lock.seek(0)
+                    msvcrt.locking(lock.fileno(), msvcrt.LK_NBLCK, 1)
+                else:
+                    import fcntl
+                    fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except OSError:
+                raise ValueError("Эта серия уже открыта в другом окне Substance") from None
+            if alternatives:
+                atomic_json(recovery, {"context": self.context, "alternatives": alternatives})
+            # Read again under the lock: an older editor may have checkpointed.
+            for name in states:
+                source = path.with_name(name)
+                state = json.loads(source.read_text(encoding="utf-8"))
+                if state.get("context") != states["journal.json"]["context"]:
+                    raise ValueError("Не совпали контексты прежнего SSH-черновика")
+                state["context"] = self.context
+                destination = self.path.with_name(name)
+                if destination.exists():
+                    current = json.loads(destination.read_text(encoding="utf-8"))
+                    if current != state:
+                        raise ValueError("У серии есть два разных черновика. Прежний сохранён в " + str(path.parent))
+                else:
+                    atomic_json(destination, state)
+            atomic_json(path.parent / "migrated-to.json", {"context": self.context})
 
     def _persist(self, state):
         atomic_json(self.path, state)
@@ -412,3 +509,6 @@ class RemoteDocumentRepository:
         # network availability; the durable journal is never deleted here.
         if not self._file_lock.closed:
             self._file_lock.close()
+        callback, self._on_close = self._on_close, None
+        if callback:
+            callback()

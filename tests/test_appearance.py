@@ -159,6 +159,8 @@ def test_settings_validation_migration_persistence_and_resets(tmp_path):
     assert a.general['waveColor'] == ''
     assert a.timing['videoPercent'] == 25 and a.timing['videoSide'] == 'left'
     assert a.translation == DEFAULTS['translation']
+    assert a.timing['editorFocus'] is False
+    a.setValue('translation', 'editorFocus', True)
     a.setValue('general', 'editorFont', 23)
     a.setValue('general', 'timecodeFont', 'plain')
     a.setValue('general', 'timecodeSize', 28)
@@ -172,6 +174,8 @@ def test_settings_validation_migration_persistence_and_resets(tmp_path):
     assert restored.timecodeFamily == 'Courier New'
     assert restored.general['timecodeSize'] == 28
     assert restored.timing['audioHeight'] == 251
+    assert restored.translation['editorFocus'] is True
+    assert restored.timing['editorFocus'] is False
     assert restored.lightColors['editorText'] == '#123456'
     assert restored.darkColors['editorText'] == '#fedcba'
     a.reset('timing')
@@ -239,6 +243,134 @@ def ui(tmp_path, monkeypatch, qt_application):
     shiboken6.delete(engine)
     qInstallMessageHandler(previous)
     assert not errors, errors
+
+
+@pytest.mark.parametrize('mode', ['timing', 'translation'])
+def test_optional_editor_focus_and_space_playback(ui, monkeypatch, mode):
+    b, window, _ = ui
+    b.setMode(mode)
+    window.requestActivate()
+    QTest.qWait(60)
+    panel = window.findChild(QObject, mode + 'Editor')
+    field = panel.findChild(QObject, 'subtitleEditor')
+    toggle = panel.findChild(QObject, 'editorFocusToggle')
+    assert toggle.isVisible() and not toggle.property('checked')
+    assert not field.hasActiveFocus()
+    tools = panel.findChild(QObject, 'editorFormattingTools')
+    bold = panel.findChild(QObject, 'assFormat_b')
+    strike = panel.findChild(QObject, 'assFormat_s')
+    assert toggle.parentItem() is tools
+    center = toggle.mapToItem(panel, QPointF(toggle.width() / 2, toggle.height() / 2))
+    assert center.y() == pytest.approx(bold.mapToItem(panel, QPointF(0, bold.height() / 2)).y(), abs=1)
+    assert toggle.mapToItem(panel, QPointF()).x() >= strike.mapToItem(panel, QPointF(strike.width(), 0)).x()
+
+    plays = []
+    monkeypatch.setattr(b.media_controller.player, 'play', lambda: plays.append(True))
+    b.media_controller.path = 'keyboard-test.wav'
+    b.media_controller.changed.emit()
+    QTest.qWait(30)
+
+    def press_space():
+        QTest.keyClick(window, Qt.Key.Key_Space)
+        QTest.qWait(30)
+
+    def click_toggle():
+        point = toggle.mapToScene(QPointF(toggle.width() / 2, toggle.height() / 2)).toPoint()
+        QTest.mouseClick(window, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, point)
+        QTest.qWait(40)
+
+    field.forceActiveFocus()
+    field.setProperty('text', 'Draft')
+    field.setProperty('cursorPosition', 5)
+    press_space()
+    assert field.property('text') == 'Draft '
+    assert not plays
+    b.navigate(1)
+    QTest.qWait(40)
+    assert not field.hasActiveFocus()
+    text = field.property('text')
+    press_space()
+    assert len(plays) == 1 and field.property('text') == text
+
+    click_toggle()
+    assert toggle.property('checked') and field.hasActiveFocus()
+    b.navigate(-1)
+    QTest.qWait(40)
+    assert field.hasActiveFocus()
+    # Manual table selection may take focus; navigation restores it when opted in.
+    panel.findChild(QObject, 'editorNavigationFocus').forceActiveFocus()
+    b.navigate(1)
+    QTest.qWait(40)
+    assert field.hasActiveFocus()
+    restored = AppearanceSettings(b.appearance.settings)
+    assert getattr(restored, mode)['editorFocus'] is True
+    other_mode = 'translation' if mode == 'timing' else 'timing'
+    b.setMode(other_mode)
+    QTest.qWait(40)
+    assert not toggle.property('checked') and not field.hasActiveFocus()
+    b.setMode(mode)
+    QTest.qWait(40)
+    assert toggle.property('checked') and field.hasActiveFocus()
+
+    click_toggle()
+    assert not toggle.property('checked') and not field.hasActiveFocus()
+    press_space()
+    assert len(plays) == 2
+    settings = window.findChild(QObject, 'settingsDialog')
+    settings.open()
+    QTest.qWait(40)
+    press_space()
+    assert len(plays) == 2
+    settings.close()
+    QTest.qWait(40)
+
+    b.appearance.setValue('general', 'uiScale', 125)
+    window.resize(980, 650)
+    QTest.qWait(60)
+    point = toggle.mapToItem(panel, QPointF())
+    assert point.x() >= 0 and point.x() + toggle.width() <= panel.width()
+    assert point.y() < field.mapToItem(panel, QPointF()).y()
+    assert not window.grabWindow().isNull()
+
+
+@pytest.mark.parametrize('mode', ['timing', 'translation'])
+@pytest.mark.parametrize('method', ['keyboard', 'menu'])
+def test_cut_word_and_paste_into_another_cue(ui, mode, method):
+    b, window, js = ui
+    b.setMode(mode)
+    window.requestActivate()
+    QTest.qWait(40)
+    field = window.findChild(QObject, 'subtitleEditor')
+    field.forceActiveFocus()
+    field.setProperty('text', 'Move word')
+    field.select(5, 9)
+    count = b.count
+    if method == 'keyboard':
+        QTest.keyClick(window, Qt.Key.Key_X, Qt.KeyboardModifier.ControlModifier)
+    else:
+        js('cutTextAction.trigger()')
+    QTest.qWait(30)
+    assert field.property('text') == 'Move '
+    b.navigate(1)
+    QTest.qWait(40)
+    assert not field.hasActiveFocus()
+    field.setProperty('text', 'Destination ')
+    field.setProperty('cursorPosition', 12)
+    if method == 'keyboard':
+        QTest.keyClick(window, Qt.Key.Key_V, Qt.KeyboardModifier.ControlModifier)
+    else:
+        js('pasteTextAction.trigger()')
+    QTest.qWait(40)
+    assert b.count == count
+    assert field.property('text') == 'Destination word'
+    assert field.hasActiveFocus()
+    assert b.flush()
+    attribute = 'translation' if mode == 'translation' else 'text'
+    assert getattr(b.editor.document.cues[0], attribute) == 'Move '
+    assert getattr(b.editor.document.cues[1], attribute) == 'Destination word'
+    # Inserting complete cues stays an explicit, separate command.
+    js('pasteAction.trigger()')
+    assert b.count == count + 1
 
 
 def test_sidebar_visibility_persists_across_windows(ui):

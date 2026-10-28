@@ -9,6 +9,9 @@ Substance uses unmodified third-party runtimes and libraries. Their licenses app
 | NumPy | https://numpy.org/ | BSD-3-Clause and bundled component notices |
 | OpenCV (headless runtime) | https://github.com/opencv/opencv-python | Apache-2.0; wheel includes additional third-party notices |
 | ONNX Runtime | https://github.com/microsoft/onnxruntime | MIT and incorporated notices |
+| Hugging Face Tokenizers | https://github.com/huggingface/tokenizers | Apache-2.0 |
+| py3langid | https://github.com/adbar/py3langid | BSD-3-Clause; incorporates langid.py under BSD-2-Clause |
+| Multilingual MPNet sentence embeddings (optional download) | https://huggingface.co/sentence-transformers/paraphrase-multilingual-mpnet-base-v2 and https://huggingface.co/Xenova/paraphrase-multilingual-mpnet-base-v2 | Apache-2.0. Quantized ONNX weights and tokenizer are pinned to an immutable revision and verified with SHA-256; weights are not bundled. |
 | PyAV and its FFmpeg libraries | https://github.com/PyAV-Org/PyAV | BSD-3-Clause; the wheel carries separate FFmpeg and codec notices. Bitmap decoding runs in an isolated helper process. |
 | wav2vec2 acoustic alignment weights (optional downloads) | https://huggingface.co/Xenova/wav2vec2-base-960h and https://huggingface.co/onnx-community/wav2vec2-large-xlsr-53-russian-ONNX | Original facebook wav2vec2 and Russian fine-tuned model report Apache-2.0. ONNX weights are pinned to immutable revisions with SHA-256 verification; weights are not bundled. |
 | Pillow | https://python-pillow.org/ | MIT-CMU and incorporated notices |

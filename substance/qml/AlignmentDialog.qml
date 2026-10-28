@@ -20,7 +20,8 @@ NativeDialog {
         tools.analyze("align", {scope: scopeChoice.currentIndex === 0 ? "current" : "all", selected: scopeChoice.currentIndex === 1,
             model: selectedModel.id, language: speech.languages[languageChoice.currentIndex].id,
             maxShift: searchWindow.value, edges: ["both", "start", "end"][edgesChoice.currentIndex],
-            lead: leadTime.value, tail: tailTime.value, cps: readingSpeed.value, cpu: cpuOnly.checked})
+            lead: leadTime.value, tail: tailTime.value, cps: readingSpeed.value, cpu: cpuOnly.checked,
+            original: textChoice.currentIndex === 0})
     }
     onOpened: {
         stage = tools.analysisReady ? 1 : 0
@@ -99,6 +100,8 @@ NativeDialog {
                         }
                         Label { text: "Язык речи" }
                         ComboBox { id: languageChoice; objectName: "alignmentLanguage"; Layout.fillWidth: true; model: dialog.speech.languages; textRole: "title"; onActivated: dialog.tools.invalidate() }
+                        Label { text: "Сопоставлять по" }
+                        ComboBox { id: textChoice; objectName: "alignmentTextSource"; Layout.fillWidth: true; model: ["Оригиналу", "Рабочему тексту / переводу"]; onActivated: dialog.tools.invalidate() }
                     }
                     RowLayout {
                         visible: dialog.stage === 0

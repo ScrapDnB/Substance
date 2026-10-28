@@ -21,6 +21,34 @@ WAVEFORM_SAMPLES_PER_PEAK = 4
 WAVEFORM_PEAK_MS = WAVEFORM_SAMPLES_PER_PEAK * 1000 / AUDIO_SAMPLE_RATE
 SPECTRUM_SAMPLES_PER_FRAME = 160
 SPECTRUM_FRAME_MS = SPECTRUM_SAMPLES_PER_FRAME * 1000 / AUDIO_SAMPLE_RATE
+SPECTRUM_FFT_SIZE = 512
+SPECTRUM_BINS = SPECTRUM_FFT_SIZE // 2
+
+
+class SpectrogramAnalysis:
+    """Overlapping, centered FFT windows, continuous across decoder chunks."""
+
+    def __init__(self):
+        self.window = np.hanning(SPECTRUM_FFT_SIZE).astype(np.float32)
+        self.pending = np.zeros(SPECTRUM_FFT_SIZE // 2, dtype=np.float32)
+        self.samples = self.frames = 0
+
+    def feed(self, pcm, final=False):
+        self.samples += len(pcm)
+        self.pending = np.concatenate((self.pending, pcm))
+        count = (max(0, (len(self.pending) - SPECTRUM_FFT_SIZE) // SPECTRUM_SAMPLES_PER_FRAME + 1)
+                 if not final else (self.samples + SPECTRUM_SAMPLES_PER_FRAME - 1) // SPECTRUM_SAMPLES_PER_FRAME - self.frames)
+        if not count:
+            return np.empty((0, SPECTRUM_BINS), dtype=np.uint8)
+        required = (count - 1) * SPECTRUM_SAMPLES_PER_FRAME + SPECTRUM_FFT_SIZE
+        if required > len(self.pending):
+            self.pending = np.pad(self.pending, (0, required - len(self.pending)))
+        windows = np.lib.stride_tricks.sliding_window_view(self.pending, SPECTRUM_FFT_SIZE)[::SPECTRUM_SAMPLES_PER_FRAME][:count]
+        power = np.abs(np.fft.rfft(windows * self.window, axis=1))[:, 1:] * (2 / self.window.sum())
+        intensity = np.clip((20 * np.log10(power + 1e-10) + 80) * 255 / 80, 0, 255).astype(np.uint8)
+        self.pending = self.pending[count * SPECTRUM_SAMPLES_PER_FRAME:]
+        self.frames += count
+        return intensity
 
 
 def ffmpeg_executable() -> str:
@@ -92,9 +120,9 @@ class AudioAnalysis(QObject):
             if self.cancelled.is_set():
                 return
             if self.audio_available is False:
-                self.completed.emit(np.empty(0, dtype=np.float32), np.empty((0, 64), dtype=np.uint8), [])
+                self.completed.emit(np.empty(0, dtype=np.float32), np.empty((0, SPECTRUM_BINS), dtype=np.uint8), [])
                 return
-            fft_window = np.hanning(256).astype(np.float32)
+            spectral_analysis = SpectrogramAnalysis()
             peaks = []
             spectrum = bytearray()
             residual = b""
@@ -106,13 +134,7 @@ class AudioAnalysis(QObject):
                 peak_padding = (-len(pcm)) % WAVEFORM_SAMPLES_PER_PEAK
                 peak_pcm = np.pad(pcm, (0, peak_padding)) if peak_padding else pcm
                 peaks.append(np.max(np.abs(peak_pcm.reshape(-1, WAVEFORM_SAMPLES_PER_PEAK)), axis=1))
-                frame_padding = (-len(pcm)) % SPECTRUM_SAMPLES_PER_FRAME
-                frames = np.pad(pcm, (0, frame_padding)) if frame_padding else pcm
-                frames = frames.reshape(-1, SPECTRUM_SAMPLES_PER_FRAME)
-                padded = np.pad(frames, ((0, 0), (0, 96))) * fft_window
-                power = np.abs(np.fft.rfft(padded, axis=1))[:, 1:129].reshape(-1, 64, 2).max(axis=2)
-                intensity = np.clip((20 * np.log10(power + 1e-7) + 65) * 255 / 65, 0, 255).astype(np.uint8)
-                spectrum.extend(intensity.tobytes())
+                spectrum.extend(spectral_analysis.feed(pcm).tobytes())
 
             with tempfile.TemporaryFile() as error_log:
                 self.process = subprocess.Popen([ffmpeg_executable(), "-nostdin", "-v", "error", "-i", self.path, "-map", f"0:a:{self.track}", "-vn", "-ac", "1", "-ar", str(AUDIO_SAMPLE_RATE), "-f", "f32le", "pipe:1"], stdout=subprocess.PIPE, stderr=error_log, **process_options())
@@ -141,12 +163,13 @@ class AudioAnalysis(QObject):
                     error_log.seek(0)
                     error = error_log.read(4000).decode(errors="replace").strip()
                     if self.track == 0 and "matches no streams" in error:
-                        self.completed.emit(np.empty(0, dtype=np.float32), np.empty((0, 64), dtype=np.uint8), [])
+                        self.completed.emit(np.empty(0, dtype=np.float32), np.empty((0, SPECTRUM_BINS), dtype=np.uint8), [])
                         return
                     raise ValueError(error or "В файле нет выбранной аудиодорожки")
                 if residual:
                     analyze(np.frombuffer(residual, dtype="<f4"))
-            self.completed.emit(np.concatenate(peaks) if peaks else np.empty(0, dtype=np.float32), np.frombuffer(bytes(spectrum), dtype=np.uint8).reshape(-1, 64), [])
+            spectrum.extend(spectral_analysis.feed(np.empty(0, dtype=np.float32), final=True).tobytes())
+            self.completed.emit(np.concatenate(peaks) if peaks else np.empty(0, dtype=np.float32), np.frombuffer(bytes(spectrum), dtype=np.uint8).reshape(-1, SPECTRUM_BINS), [])
         except Exception as exc:
             if not self.cancelled.is_set():
                 self.failed.emit(str(exc))
@@ -229,7 +252,7 @@ class MediaController(QObject):
         self.player.errorOccurred.connect(lambda code, message: self.error.emit(message))
         self.path = ""
         self.peaks = np.empty(0, dtype=np.float32)
-        self.spectrum = np.empty((0, 64), dtype=np.uint8)
+        self.spectrum = np.empty((0, SPECTRUM_BINS), dtype=np.uint8)
         self.keyframes: list[int] = []
         self.shot_changes: list[int] = []
         self._progress = 0.0
@@ -443,7 +466,7 @@ class MediaController(QObject):
         self.player.stop()
         self.path = str(path)
         self.peaks = np.empty(0, dtype=np.float32)
-        self.spectrum = np.empty((0, 64), dtype=np.uint8)
+        self.spectrum = np.empty((0, SPECTRUM_BINS), dtype=np.uint8)
         self.keyframes = []
         self._frame_position = 0
         self._priming = True
@@ -475,7 +498,7 @@ class MediaController(QObject):
         self.player.setSource(QUrl())
         self.path = ""
         self.peaks = np.empty(0, dtype=np.float32)
-        self.spectrum = np.empty((0, 64), dtype=np.uint8)
+        self.spectrum = np.empty((0, SPECTRUM_BINS), dtype=np.uint8)
         self.keyframes = []
         self.changed.emit()
         self.analysisChanged.emit()

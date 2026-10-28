@@ -4,7 +4,7 @@ import pytest
 from substance.document import Cue, Document, parse_ass, save_document, load_document, export_document
 from substance.editor import Editor
 from substance.editor_tools import (align_words, apply_plan, balance, clean_text, lane_layout,
-                                    plan, split_static)
+                                    plan, shared_boundaries, split_static)
 
 
 def document(*rows):
@@ -138,10 +138,11 @@ def test_japanese_alignment_recovers_full_phrase_instead_of_first_voice_island()
     assert not align_words(doc, [0], tokens)[0].applicable
 
 
-def test_lanes_are_anonymous_bounded_and_keep_all_cues():
+def test_lanes_are_anonymous_unlimited_and_keep_all_cues():
     doc = document(*[(0, 2000 + i, str(i), f'Actor {i}') for i in range(20)])
     rows = lane_layout(doc.cues)
-    assert len(rows) == 3
+    assert len(rows) == 20
+    assert all(len(row['items']) == 1 and row['items'][0]['laneCount'] == 20 for row in rows)
     assert sorted(c['index'] for row in rows for c in row['items']) == list(range(20))
     assert all(set(row) == {'items'} for row in rows)
     for i, cue in enumerate(doc.cues):
@@ -150,6 +151,37 @@ def test_lanes_are_anonymous_bounded_and_keep_all_cues():
     assert lane_layout(doc.cues) == rows
     nonoverlapping = document((0, 500, 'A', 'First'), (600, 1000, 'B', 'Second'))
     assert len(lane_layout(nonoverlapping.cues)) == 1
+
+
+def test_lanes_use_local_overlap_groups_and_reuse_released_lanes():
+    doc = document((0, 100, 'Solo'), (100, 400, 'Long'), (150, 250, 'Short'),
+                   (250, 450, 'Next short'), (450, 600, 'Solo again'),
+                   (1000, 1400, 'A'), (1100, 1500, 'B'), (1200, 1600, 'C'))
+    doc.cues.append(Cue(start=0, end=2000, text='Comment', comment=True))
+    # Input order must not determine overlap groups or ASS/actor placement.
+    doc.cues.reverse()
+    rows = lane_layout(doc.cues)
+    placement = {item['text']: (lane, item['laneCount'])
+                 for lane, row in enumerate(rows) for item in row['items']}
+    assert placement == {'Solo': (0, 1), 'Long': (0, 2), 'Short': (1, 2),
+                         'Next short': (1, 2), 'Solo again': (0, 1),
+                         'A': (0, 3), 'B': (1, 3), 'C': (2, 3)}
+    for row in rows:
+        assert all(a['end'] <= b['start'] for a, b in zip(row['items'], row['items'][1:]))
+    assert lane_layout([]) == []
+
+
+def test_shared_boundaries_ignore_order_comments_gaps_and_ambiguous_edges():
+    doc = document((2000, 3000, 'Right'), (0, 2000, 'Left'),
+                   (3500, 4000, 'Gap'), (4000, 4500, 'One'),
+                   (4000, 5000, 'Ambiguous'), (5000, 5000, 'Untimed'))
+    doc.cues.append(Cue(start=2000, end=3000, text='Comment', comment=True))
+    assert shared_boundaries(doc.cues) == [
+        {'left': 1, 'right': 0, 'time': 2000, 'minimum': 10, 'maximum': 2990}]
+    items = {c['index']: c for row in lane_layout(doc.cues) for c in row['items']}
+    assert items[1]['endJoint'] == items[0]['startJoint'] == shared_boundaries(doc.cues)[0]
+    assert items[2]['endJoint'] is None
+    assert items[3]['startJoint'] is None
 
 
 def test_clean_does_not_modify_tag_parameters():

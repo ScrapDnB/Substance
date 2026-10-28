@@ -1,5 +1,6 @@
 """Editor tokens stay in the operating system vault, never in its outbox."""
 import hashlib
+import json
 import sys
 
 
@@ -39,3 +40,20 @@ class SessionVault:
                 backend.delete_password(self.service, key)
         except Exception:
             pass
+
+    def put_transport(self, identity, account, secret):
+        try:
+            self._backend().set_password(self.service + ".ssh", self._key(identity, account), json.dumps(secret))
+            return True
+        except Exception:
+            return False
+
+    def get_transport(self, identity, account):
+        try:
+            raw = self._backend().get_password(self.service + ".ssh", self._key(identity, account))
+            value = json.loads(raw) if raw else None
+            if isinstance(value, dict) and all(k in ("password", "key_passphrase") and isinstance(v, str) for k, v in value.items()):
+                return value
+        except Exception:
+            pass
+        return None

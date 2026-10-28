@@ -134,3 +134,53 @@ def test_retina_wave_has_detail_within_one_logical_pixel(qt_application):
     finally:
         shiboken6.delete(wave)
         media.shutdown()
+
+
+def test_spectrum_preserves_short_transients_and_exact_eof_when_zoomed_out():
+    from substance.visuals import spectrum_envelope
+    data = np.zeros((1000, 256), dtype=np.uint8)
+    data[321, 80] = 255
+    values = spectrum_envelope(data, 0, 12000, 120)
+    assert values[32, 80] == 255
+    assert not values[100:].any()
+    assert not spectrum_envelope(data, 20000, 1000, 500).any()
+
+
+def test_retina_spectrum_interpolates_in_time_and_frequency_and_caches_playback(qt_application):
+    media = MediaController()
+    wave = Waveform()
+    wave.media = media
+    wave.spectral = True
+    wave.showCueRange = False
+    wave.setViewport(0, 1000)
+    media.spectrum = np.tile(np.array([0, 255], dtype=np.uint8), (100, 1))
+    media.spectrum[20] = [128, 128]
+    try:
+        image = wave._spectrum_image(1000, 2)
+        assert image.width() == 2000
+        # Neighboring device pixels interpolate, rather than repeat 10 ms blocks.
+        colors = {image.pixelColor(x, 0).getRgb() for x in range(380, 400)}
+        assert len(colors) > 10
+        media.positionChanged.emit()
+        assert wave._spectrum_image(1000, 2) is image
+        wave.setViewport(500, 1000)
+        after = wave._spectrum_image(1000, 2)
+        assert after is not image
+        assert after.pixelColor(1200, 0).alpha() == 0
+        wave.setViewport(0, 1000)
+        wave.setWidth(1000)
+        wave.setHeight(300)
+        media.peaks = np.zeros(4000, dtype=np.float32)
+        rendered = QImage(2000, 600, QImage.Format.Format_RGB32)
+        rendered.setDevicePixelRatio(2)
+        painter = QPainter(rendered)
+        try:
+            wave.paint(painter)
+        finally:
+            painter.end()
+        # A two-bin source must still blend vertically across the display.
+        colors = {rendered.pixelColor(123, y).getRgb() for y in range(120, 500)}
+        assert len(colors) > 100
+    finally:
+        shiboken6.delete(wave)
+        media.shutdown()

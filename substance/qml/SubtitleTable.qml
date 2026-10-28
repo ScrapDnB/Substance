@@ -215,7 +215,9 @@ Item {
                             }
                             onDoubleClicked: mouse => {
                                 if (overPortrait(mouse.x, mouse.y)) return
-                                backend.seekCurrent(); backend.focusEditor()
+                                backend.seekCurrent()
+                                backend.centerWaveform()
+                                backend.focusEditor()
                             }
                             NativeToolTip { enabled: row.warning || rowMouse.overPortrait(rowMouse.mouseX, rowMouse.mouseY); text: rowMouse.overPortrait(rowMouse.mouseX, rowMouse.mouseY) ? "Увеличить портрет" : row.issues }
                         }

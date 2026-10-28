@@ -36,7 +36,7 @@ class NativeSDKEXE(EXE):
             osx.set_macos_sdk_version = original
 
 datas = [(str(root / "substance/qml"), "substance/qml"), (str(root / "substance/resources"), "substance/resources")]
-datas += collect_data_files("imageio_ffmpeg") + collect_data_files("spellchecker")
+datas += collect_data_files("imageio_ffmpeg") + collect_data_files("spellchecker") + collect_data_files("py3langid")
 binaries = []
 speech_cli = root / 'build/whisper' / ('whisper-cli.exe' if os.name == 'nt' else 'whisper-cli')
 if not speech_cli.is_file():
@@ -103,7 +103,7 @@ coll = COLLECT(exe, a.binaries, a.datas, strip=False, upx=False, name="Substance
 if sys.platform == "darwin":
     app = BUNDLE(coll, name="Substance.app", icon=icon, bundle_identifier="dev.scrapdnb.substance",
         info_plist={
-            "CFBundleShortVersionString": "0.9.1", "CFBundleVersion": "0.9.1b2", "SubstanceVersion": "v0.9.1-beta.2",
+            "CFBundleShortVersionString": "0.9.2", "CFBundleVersion": "0.9.2b0", "SubstanceVersion": "v0.9.2-beta",
             "NSHighResolutionCapable": True, "LSMinimumSystemVersion": "15.0", "NSHumanReadableCopyright": "Substance · ScrapDnB",
             "CFBundleDocumentTypes": [
                 {"CFBundleTypeName": "ASS Subtitle", "CFBundleTypeExtensions": ["ass", "ssa", "srt", "vtt"], "CFBundleTypeRole": "Editor", "LSHandlerRank": "Alternate"},

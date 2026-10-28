@@ -8,7 +8,7 @@ Pane {
     required property var colors
     readonly property real uiScale: backend.appearance.general.uiScale / 100
     readonly property bool compactControls: width < 1000 * uiScale
-    readonly property bool tracksMode: backend.editorTools.displayMode === "tracks"
+    readonly property bool tracksMode: backend.editorTools.editMode === "tracks"
     padding: 0
     background: Rectangle { color: pane.colors.panel }
     ColumnLayout {
@@ -34,12 +34,23 @@ Pane {
                     MenuItem { text: "Соседние реплики"; checkable: true; checked: backend.editorTools.snapOptions.cues; onTriggered: backend.editorTools.setSnapOption("cues", checked) }
                 }
             }
-            SegmentedSelector {
-                objectName: "audioDisplaySelector"
-                labels: ["Волна", "Спектр", "Дорожки"]
-                selectedIndex: pane.tracksMode ? 2 : wave.spectral ? 1 : 0
-                onActivated: index => backend.editorTools.setDisplayMode(["wave", "spectrum", "tracks"][index])
-                Accessible.name: "Отображение аудио"
+            RowLayout {
+                id: audioSelectors
+                spacing: 10
+                SegmentedSelector {
+                    objectName: "audioDisplaySelector"
+                    labels: ["Волна", "Спектр"]
+                    selectedIndex: wave.spectral ? 1 : 0
+                    onActivated: index => backend.editorTools.setDisplayMode(["wave", "spectrum"][index])
+                    Accessible.name: "Отображение аудио"
+                }
+                SegmentedSelector {
+                    objectName: "audioEditModeSelector"
+                    labels: ["Дорожки", "Границы"]
+                    selectedIndex: pane.tracksMode ? 0 : 1
+                    onActivated: index => backend.editorTools.setEditMode(["tracks", "boundaries"][index])
+                    Accessible.name: "Режим редактирования аудиотайминга"
+                }
             }
         }
         Item {
@@ -210,7 +221,7 @@ Pane {
                         objectName: "audioZoomControls"
                         spacing: 4
                         ControlButton { symbol: "minus"; onClicked: wave.zoom(1.25); hint: "Уменьшить горизонтальный масштаб аудио" }
-                        ControlButton { symbol: "center"; onClicked: wave.center(); hint: "Показать текущую реплику" }
+                        ControlButton { objectName: "audioCenterCue"; symbol: "center"; onClicked: wave.center(); hint: "Показать текущую реплику" }
                         ControlButton { symbol: "plus"; onClicked: wave.zoom(0.8); hint: "Увеличить горизонтальный масштаб аудио" }
                     }
                 }

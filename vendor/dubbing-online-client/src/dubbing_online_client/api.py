@@ -12,7 +12,8 @@ class Cancelled(Exception):
 
 
 MESSAGES = {
-    "review_disabled": "В команде проекта нет редактора. Этап редактуры выключен.",
+    "recording_context_required": "Обновите Dubbing Companion для безопасной отправки отметок записи. Затем проверьте актуальный текст и подтвердите отметку заново.",
+    "membership_exists": "Этот человек уже в команде. Обновите проект и измените его роли в списке участников.",
     "project_import_invalid": "Данные .dub не соответствуют формату сервера. Проверьте имена, поля глоссария и тексты серий.",
     "workspace_revision_conflict": "Кастинг или отметки записи уже изменены коллегой. Черновик сохранён; откройте сравнение в разделе восстановления.",
     "workspace_data_invalid": "Проверьте данные актёров, назначения и отметки записи.",
@@ -54,6 +55,7 @@ MESSAGES = {
     "backup_not_available": "Резервная копия недоступна.",
     "backup_in_progress": "На сервере уже создаётся резервная копия.",
     "backup_integrity_failed": "Контрольная сумма копии не совпала. Файл не сохранён.",
+    "backup_too_large": "Размер резервной копии превышает 1 ТБ. Файл не сохранён.",
     "authentication_required": "Войдите в аккаунт сервера.",
     "session_invalid": "Сессия истекла или отозвана. Войдите заново.",
     "account_disabled": "Аккаунт отключён администратором.",
@@ -75,6 +77,14 @@ MESSAGES = {
     "reopen_reason_required": "Укажите причину переоткрытия работы.",
     "translation_assignment_required": "Перевод серии назначен другому участнику.",
     "editing_assignment_required": "Редактура серии назначена другому участнику.",
+    "recording_role_required": "Отметить запись могут администратор проекта, режиссёр, звукорежиссёр или кастинг-менеджер.",
+    "recording_not_ready": "Текущая версия текста ещё не готова к записи: сдайте перевод и, если в команде есть редактор, завершите редактуру.",
+    "schedule_revision_conflict": "Срок или пометки уже изменены коллегой. Обновите данные перед повторным сохранением.",
+    "schedule_note_empty": "Введите текст пометки.",
+    "schedule_notes_limit": "Достигнут предел пометок для этой работы (500).",
+    "schedule_workflow_required": "Изменяйте сроки и пометки в карточке работы по серии.",
+    "review_disabled": "В команде проекта нет редактора. Этап редактуры выключен.",
+    "recording_status_workflow_required": "Измените статус записи отдельным действием серии.",
     "validation_failed": "Проверьте поля формы: имя, логин и пароль (не менее 12 символов).",
     "glossary_field_conflict": "Эти поля глоссария уже изменены. Обновите запись и сравните правки.",
     "approved_entry_requires_proposal": "Для утверждённой записи отправьте предложение редактору.",
@@ -256,6 +266,7 @@ class ApiClient:
         return base64.b64encode(raw).decode("ascii")
 
     def download(self, path, destination, expected_sha256):
+        from .backup_archive import MAX_BYTES
         import hashlib
         import os
         from pathlib import Path
@@ -289,7 +300,7 @@ class ApiClient:
                             if not chunk:
                                 break
                             total += len(chunk)
-                            if total > 8 * 1024 * 1024 * 1024:
+                            if total > MAX_BYTES:
                                 raise ApiError("backup_too_large")
                             sha256.update(chunk)
                             stream.write(chunk)

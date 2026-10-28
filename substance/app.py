@@ -76,7 +76,7 @@ def main():
         from .repositories import online_client
         online_client()
         stream = binary_stdio(sys.stdout, output=True)
-        stream.write(json.dumps({"protocol": 1, "document_schema": 1, "version": __version__, "capabilities": ["document_cas_v1"]}).encode("utf-8"))
+        stream.write(json.dumps({"protocol": 1, "document_schema": 1, "version": __version__, "capabilities": ["document_cas_v1", "stable_server_identity_v1", "ssh_transport_v1"]}).encode("utf-8"))
         stream.flush()
         return 0
     launch = None
@@ -89,6 +89,14 @@ def main():
             return 2
         if "media_path" in launch and not isinstance(launch["media_path"], str):
             return 2
+        if "server_identity" in launch and not isinstance(launch["server_identity"], str):
+            return 2
+        if "ssh" in launch:
+            if not isinstance(launch["ssh"], dict) or not isinstance(launch.get("ssh_directory"), str):
+                return 2
+            secret = launch.get("ssh_secret", {})
+            if not isinstance(secret, dict) or any(k not in ("password", "key_passphrase") or not isinstance(v, str) for k, v in secret.items()):
+                return 2
         for field in ("server_url", "project_id", "episode_id", "episode_name", "code"):
             if not isinstance(launch.get(field), str) or not launch[field]:
                 return 2

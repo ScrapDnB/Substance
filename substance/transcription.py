@@ -219,9 +219,13 @@ class TranscriptionJob(SpeechJob):
         self.timing = timing or TimingOptions()
         self.capture_words = False
         self.words = []
+        self.progress_scale = 1.
+
+    def report_progress(self, value, message):
+        self.signals.progress.emit(value*self.progress_scale, message)
 
     def execute(self):
-        self.signals.progress.emit(0, 'Проверка модели…')
+        self.report_progress(0, 'Проверка модели…')
         verify_model(self.model_path, self.model, self.cancelled)
         vad = vad_model_path()
         if not vad:
@@ -229,7 +233,7 @@ class TranscriptionJob(SpeechJob):
         verify_model(vad, SpeechModel('silero-v6.2.0', '', VAD_SIZE, VAD_SHA256), self.cancelled)
         with tempfile.TemporaryDirectory(prefix='substance-speech-') as directory:
             audio = Path(directory) / 'audio.wav'
-            self.signals.progress.emit(0, 'Подготовка аудиодорожки…')
+            self.report_progress(0, 'Подготовка аудиодорожки…')
             command = [ffmpeg_executable(), '-nostdin', '-v', 'error', '-ss', str(self.start / 1000),
                        '-i', self.media, '-t', str((self.end - self.start) / 1000), '-map', f'0:a:{self.track}',
                        '-vn', '-ac', '1', '-ar', '16000', '-c:a', 'pcm_s16le', '-y', str(audio)]
@@ -266,7 +270,7 @@ class TranscriptionJob(SpeechJob):
             if self.cpu:
                 command.append('-ng')
             self.check_cancelled()
-            self.signals.progress.emit(0, 'Распознавание…')
+            self.report_progress(0, 'Распознавание…')
             self.process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                             text=True, encoding='utf-8', errors='surrogateescape', bufsize=1, **process_options())
             if self.cancelled.is_set():
@@ -298,9 +302,9 @@ class TranscriptionJob(SpeechJob):
                         for token in timeline.tokens(segment):
                             emit_words(tokens.feed(token))
                         progress = segment['end'] / max(1, end - self.start)
-                        self.signals.progress.emit(min(0.99, progress), 'Распознавание…')
+                        self.report_progress(min(0.99, progress), 'Распознавание…')
                     elif match := PROGRESS.search(line):
-                        self.signals.progress.emit(min(0.99, int(match[1]) / 100), 'Распознавание…')
+                        self.report_progress(min(0.99, int(match[1]) / 100), 'Распознавание…')
                     elif line.strip():
                         log.append(line.strip())
                 self.process.wait()

@@ -33,6 +33,28 @@ class AlignmentModels(QObject):
         return [{'id': m.id, 'title': m.title, 'installed': (self.directory/m.filename).is_file() and
                  (self.directory/m.filename).stat().st_size == m.size} for m in MODELS]
 
+    @Property(bool, notify=changed)
+    def semanticInstalled(self):
+        from .semantic_models import installed
+        return installed(self.directory)
+
+    @Property(int, constant=True)
+    def semanticBytes(self):
+        from .semantic_models import FILES
+        return sum(f.size for f in FILES)
+
+    @Slot()
+    def downloadSemantic(self):
+        from .semantic_models import SemanticDownload
+        if self.busy or self.backend.tools.busy:
+            return
+        self._job = SemanticDownload(self.directory)
+        self._job.signals.progress.connect(self._progressed)
+        self._job.signals.finished.connect(self._finished)
+        self._status, self._progress = 'Скачиваем многоязычную модель…', 0.
+        self.changed.emit()
+        QThreadPool.globalInstance().start(self._job)
+
     @Slot(str)
     def download(self, model_id):
         if self.busy or model_id not in MODEL_BY_ID:
@@ -59,11 +81,12 @@ class AlignmentModels(QObject):
             self._job.cancel()
 
     @Slot()
-    def importScript(self):
+    @Slot(str)
+    def importScript(self, kind='forced'):
         b = self.backend
         if self.busy or b.tools.busy or b.busy or not b.flush() or not b.flushCard():
             return
-        path, _ = QFileDialog.getOpenFileName(None, 'Добавить готовый сценарий: одна реплика на строку', '', 'Текстовый сценарий (*.txt)')
+        path, _ = QFileDialog.getOpenFileName(None, 'Добавить текст для тайминга', '', 'Сценарий, субтитры или проект (*.txt *.ass *.ssa *.srt *.vtt *.substance)')
         if not path:
             return
         try:
@@ -78,7 +101,7 @@ class AlignmentModels(QObject):
             b.selection = set(range(start, b.count))
             b._current, b._anchor = start, start
             b._refresh()
-            b.tools.open('forced')
+            b.tools.open('semantic' if kind == 'semantic' else 'forced')
             self._status = f'Добавлено реплик: {len(doc.cues)}. Выберите диапазон звучания сценария.'
         except (OSError, ValueError, TypeError) as exc:
             self._status = str(exc)

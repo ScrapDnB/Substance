@@ -67,6 +67,12 @@ class OnlineController(QObject):
     def active(self):
         return self.repository is not None
 
+    @Property(str, notify=changed)
+    def title(self):
+        names = (self._project_state.get("name") or self.context.get("project_name"),
+                 self._episode_state.get("name") or self.context.get("episode_name"))
+        return " — ".join(name.strip() for name in names if isinstance(name, str) and name.strip()) or "Онлайн-серия"
+
     @Property(bool, notify=changed)
     def busy(self):
         return self._busy
@@ -196,8 +202,9 @@ class OnlineController(QObject):
                 # Another episode/device may already have stored a renewed
                 # session for this account. Do not remove its credential.
                 token = self.repository.client.token if self.repository else ''
-                if token and vault.get(self.context['server_url'], self.context['account_id']) == token:
-                    vault.delete(self.context['server_url'], self.context['account_id'])
+                identity = self.context.get('server_identity', self.context['server_url'])
+                if token and vault.get(identity, self.context['account_id']) == token:
+                    vault.delete(identity, self.context['account_id'])
             failure = self._error
             if not self._close_requested:
                 self.backend.show_error(self._error)
@@ -209,93 +216,164 @@ class OnlineController(QObject):
 
     def connect(self, launch, *, resume=False):
         online_client()
-        from dubbing_online_client import ApiClient, ApiError
-        from dubbing_online_client.repository import RemoteDocumentRepository, atomic_json
         from dubbing_online_client.credentials import SessionVault
+        try:
+            launch = self._choose_legacy(launch)
+        except (ValueError, OSError) as exc:
+            self.backend.show_error(str(exc))
+            return
+        if launch is None:
+            return
         self._status, self._error = "Подключение к онлайн-серии…", ""
 
         def operation():
-            client = ApiClient(launch["server_url"])
-            info = client.negotiate()
-            if not {"editor_handoff", "document_cas_v1", "document_revisions"}.issubset(info.get("capabilities", [])):
-                raise ApiError("incompatible_server")
+            from dubbing_online_client.editor_identity import server_identity
+            identity = server_identity(launch["server_url"], launch.get("ssh"))
+            if launch.get("server_identity", identity) != identity:
+                raise ValueError("Не совпала идентичность онлайн-сервера")
             vault = SessionVault()
-            context = {k: launch[k] for k in ("server_url", "project_id", "episode_id", "episode_name")}
-            # Device-local context only; this path never enters a server document.
-            if isinstance(launch.get("media_path"), str) and launch["media_path"]:
-                context["media_path"] = launch["media_path"]
-            if resume:
-                client.token = vault.get(client.url, launch["account_id"])
-                if not client.token:
-                    raise ValueError("Откройте серию из DubbingManager для нового входа. Локальный черновик сохранён.")
-                account = client.request("GET", "/v1/auth/me")
-                if account["id"] != launch["account_id"]:
-                    raise ValueError("Сессия принадлежит другому аккаунту")
-            else:
-                auth = client.request("POST", "/v1/auth/editor/exchange", {"code": launch["code"], "device": "Substance"})
-                if (auth.get("project_id"), auth.get("episode_id")) != (launch["project_id"], launch["episode_id"]):
-                    raise ApiError("invalid_response")
-                client.token = auth["access_token"]
-                account = auth["user"]
-            context.update(server_url=client.url, account_id=account["id"])
-            saved = vault.put(client.url, account["id"], client.token)
-            repository = RemoteDocumentRepository(client, account["id"], context["project_id"], context["episode_id"], self.backend.data_dir / "online")
+            transport = None
+            if launch.get("ssh"):
+                from .online_transport import OnlineTransport
+                secret = vault.get_transport(identity, launch["account_id"]) if resume else launch.get("ssh_secret")
+                if secret is None:
+                    raise ValueError("Откройте серию из DubbingManager для нового SSH-входа. Черновик сохранён.")
+                transport = OnlineTransport(launch["ssh"], launch["ssh_directory"], secret)
             try:
-                repository.open()
-                glossary_repository = None
-                if "glossary_operations" in info.get("capabilities", []):
-                    from dubbing_online_client.glossary import RemoteGlossary
-                    glossary_repository = RemoteGlossary(repository)
-                    glossary_repository.refresh()
-                glossary = client.request("GET", f'/v1/projects/{context["project_id"]}/glossary')
-                images = self._images(client, context, glossary)
-                project = client.request("GET", f'/v1/projects/{context["project_id"]}')
-                reviews = None
-                if "review_threads" in info.get("capabilities", []):
-                    from dubbing_online_client.reviews import RemoteReviews
-                    reviews = RemoteReviews(repository)
-                    reviews.refresh()
-                # Persist only the context, never the code, password or token.
-                atomic_json(self.backend.data_dir / "online-last.json", context)
-                return {"repository": repository, "context": context, "glossary": glossary, "images": images, "saved": saved, "project": project, "reviews": reviews, "glossary_repository": glossary_repository}
+                return self._connect_repository(launch, resume, identity, vault, transport)
             except BaseException:
-                repository.close()
+                if transport:
+                    transport.close()
                 raise
 
         def opened(result):
-            self._session_persisted = result["saved"]
-            self.context, self.glossary, self.images = result["context"], result["glossary"], result["images"]
-            self._update_project(result["project"])
-            self._applying = True
-            # Load before attaching, so replacing a local document doesn't close
-            # the newly acquired repository.
-            try:
-                media_path = self.context.get("media_path", "")
-                media = {"path": media_path} if media_path and Path(media_path).is_file() else {}
-                document = self._document(result["repository"].snapshot, media=media)
-            except BaseException:
-                result["repository"].close()
-                self._applying = False
-                raise
-            self.backend._set_document(document, "")
-            self.repository = result["repository"]
-            self.reviews.attach(result["reviews"])
-            self.glossary_session.attach(result["glossary_repository"])
-            self.backend.editor.project_mode = True
-            self.backend.editor.validator = self.validate_edit
-            self._last_snapshot = self.backend.editor.document.to_dict()
-            self.backend.setMode("translation")
-            if media:
-                self.backend.media_controller.open(media["path"])
-            else:
-                self.backend.media_controller.clear()
-            self._applying = False
-            self._status = "Черновик сохранён на компьютере" if self.pending else f"На сервере · ревизия {self.revision}"
-            self.backend.changed.emit()
-            self.timer.start()
-            QTimer.singleShot(0, self.sync)
+            self._opened_repository(result)
 
         self._run(operation, opened)
+
+    def _choose_legacy(self, launch):
+        """Choose between old copies on the GUI thread, before consuming a code."""
+        if not launch.get("ssh") or not launch.get("account_id"):
+            return launch
+        import hashlib
+        from dubbing_online_client.editor_identity import server_identity
+        from dubbing_online_client.repository import legacy_journals
+        context = [server_identity(launch["server_url"], launch["ssh"]), launch["account_id"],
+                   launch["project_id"], launch["episode_id"]]
+        directory = self.backend.data_dir / "online"
+        key = hashlib.sha256(json.dumps(context).encode()).hexdigest()
+        if (directory / key / "journal.json").exists():
+            return launch
+        candidates = legacy_journals(directory, context)
+        if len(candidates) < 2:
+            return launch
+        from PySide6.QtWidgets import QInputDialog
+        labels = []
+        for path, states in candidates:
+            state = states["journal.json"]
+            text = next((cue.get("translation") for cue in state.get("draft", {}).get("cues", []) if cue.get("translation")), "Пометки или глоссарий")
+            labels.append(f"Ревизия {state['revision']} · {text[:70]} · {path.parent.name[:10]}")
+        selected, accepted = QInputDialog.getItem(None, "Восстановление онлайн-черновика",
+            "Найдено несколько прежних копий серии. Выберите текст для восстановления.\n"
+            "Все исходные копии останутся на компьютере.", labels, 0, False)
+        return {**launch, "legacy_journal": str(candidates[labels.index(selected)][0])} if accepted else None
+
+    def _connect_repository(self, launch, resume, identity, vault, transport):
+        from dubbing_online_client import ApiClient, ApiError
+        from dubbing_online_client.repository import RemoteDocumentRepository, atomic_json
+        client = ApiClient(transport.url if transport else launch["server_url"])
+        info = client.negotiate()
+        if not {"editor_handoff", "document_cas_v1", "document_revisions"}.issubset(info.get("capabilities", [])):
+            raise ApiError("incompatible_server")
+        context = {k: launch[k] for k in ("server_url", "project_id", "episode_id", "episode_name")}
+        context["server_identity"] = identity
+        if launch.get("ssh"):
+            # Transport parameters and host keys are public local metadata.
+            # The password and passphrase remain in memory or the OS vault.
+            context.update(ssh={k: v for k, v in launch["ssh"].items() if k in
+                ("host", "ssh_user", "ssh_port", "api_port", "fingerprint", "key_file")},
+                ssh_directory=launch["ssh_directory"])
+        # Device-local context only; this path never enters a server document.
+        if isinstance(launch.get("media_path"), str) and launch["media_path"]:
+            context["media_path"] = launch["media_path"]
+        if resume:
+            client.token = vault.get(identity, launch["account_id"])
+            if not client.token:
+                raise ValueError("Откройте серию из DubbingManager для нового входа. Локальный черновик сохранён.")
+            account = client.request("GET", "/v1/auth/me")
+            if account["id"] != launch["account_id"]:
+                raise ValueError("Сессия принадлежит другому аккаунту")
+        else:
+            auth = client.request("POST", "/v1/auth/editor/exchange", {"code": launch["code"], "device": "Substance"})
+            if (auth.get("project_id"), auth.get("episode_id")) != (launch["project_id"], launch["episode_id"]):
+                raise ApiError("invalid_response")
+            client.token = auth["access_token"]
+            account = auth["user"]
+            if launch.get("account_id") and launch["account_id"] != account["id"]:
+                raise ValueError("Сессия принадлежит другому аккаунту")
+        context.update(account_id=account["id"])
+        saved = vault.put(identity, account["id"], client.token)
+        if transport:
+            saved = vault.put_transport(identity, account["id"], transport.secret) and saved
+        repository = RemoteDocumentRepository(client, account["id"], context["project_id"], context["episode_id"],
+            self.backend.data_dir / "online", server_identity=identity,
+            migrate_loopback=transport is not None, on_close=transport.close if transport else None,
+            legacy_journal=launch.get("legacy_journal"))
+        try:
+            repository.open()
+            glossary_repository = None
+            if "glossary_operations" in info.get("capabilities", []):
+                from dubbing_online_client.glossary import RemoteGlossary
+                glossary_repository = RemoteGlossary(repository)
+                glossary_repository.refresh()
+            glossary = client.request("GET", f'/v1/projects/{context["project_id"]}/glossary')
+            images = self._images(client, context, glossary)
+            project = client.request("GET", f'/v1/projects/{context["project_id"]}')
+            reviews = None
+            if "review_threads" in info.get("capabilities", []):
+                from dubbing_online_client.reviews import RemoteReviews
+                reviews = RemoteReviews(repository)
+                reviews.refresh()
+            # Persist only the context, never the code, password or token.
+            atomic_json(self.backend.data_dir / "online-last.json", context)
+            return {"repository": repository, "context": context, "glossary": glossary, "images": images, "saved": saved, "project": project, "reviews": reviews, "glossary_repository": glossary_repository}
+        except BaseException:
+            repository.close()
+            raise
+
+    def _opened_repository(self, result):
+        self._session_persisted = result["saved"]
+        self.context, self.glossary, self.images = result["context"], result["glossary"], result["images"]
+        self._update_project(result["project"])
+        self._applying = True
+        # Load before attaching, so replacing a local document doesn't close
+        # the newly acquired repository.
+        try:
+            media_path = self.context.get("media_path", "")
+            media = {"path": media_path} if media_path and Path(media_path).is_file() else {}
+            document = self._document(result["repository"].snapshot, media=media)
+        except BaseException:
+            result["repository"].close()
+            self._applying = False
+            raise
+        self.backend._set_document(document, "")
+        self.repository = result["repository"]
+        self.reviews.attach(result["reviews"])
+        self.glossary_session.attach(result["glossary_repository"])
+        self.backend.editor.project_mode = True
+        self.backend.editor.validator = self.validate_edit
+        self._last_snapshot = self.backend.editor.document.to_dict()
+        self.backend.setMode("translation")
+        if media:
+            self.backend.media_controller.open(media["path"])
+        else:
+            self.backend.media_controller.clear()
+        self._applying = False
+        self._status = "Черновик сохранён на компьютере" if self.pending else f"На сервере · ревизия {self.revision}"
+        self.backend.changed.emit()
+        self.timer.start()
+        QTimer.singleShot(0, self.sync)
+
 
     def _images(self, client, context, glossary):
         images = {}

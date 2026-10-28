@@ -201,6 +201,38 @@ def waveform_envelope(peaks, view_ms, span_ms, columns):
     return values
 
 
+def spectrum_envelope(spectrum, view_ms, span_ms, columns):
+    """Interpolate close views; retain transient energy when zoomed out."""
+    values = np.zeros((columns, spectrum.shape[1]), dtype=np.float32)
+    if not len(spectrum) or not columns:
+        return values
+    edges = (view_ms + np.linspace(0, span_ms, columns + 1)) / SPECTRUM_FRAME_MS
+    if span_ms / columns < SPECTRUM_FRAME_MS:
+        centers = (edges[:-1] + edges[1:]) / 2
+        left = np.floor(centers).astype(np.int64)
+        fraction = (centers - left).astype(np.float32)[:, None]
+        a = spectrum[np.clip(left, 0, len(spectrum) - 1)].astype(np.float32)
+        b = spectrum[np.clip(left + 1, 0, len(spectrum) - 1)].astype(np.float32)
+        values[:] = a + (b - a) * fraction
+        values[(centers < 0) | (centers >= len(spectrum))] = 0
+    else:
+        bounds = np.floor(edges).astype(np.int64)
+        valid = (bounds[:-1] < len(spectrum)) & (bounds[1:] > 0)
+        starts = np.clip(bounds[:-1][valid], 0, len(spectrum))
+        stops = np.clip(bounds[1:][valid], 0, len(spectrum))
+        if len(starts):
+            values[valid] = np.maximum.reduceat(spectrum[starts[0]:stops[-1]], starts - starts[0], axis=0)
+    return values
+
+
+# Original blue/orange palette inspired by RX's quiet-to-loud color progression.
+_SPECTRUM_STOPS = np.array([0, .14, .30, .45, .60, .75, .90, 1])
+_SPECTRUM_COLORS = np.array([[0, 0, 0], [5, 8, 26], [25, 32, 88], [67, 32, 85],
+                             [142, 57, 40], [226, 112, 18], [255, 209, 72], [255, 246, 190]])
+SPECTRUM_PALETTE = np.stack([np.interp(np.linspace(0, 1, 256), _SPECTRUM_STOPS, channel)
+                             for channel in _SPECTRUM_COLORS.T], axis=1).astype(np.uint8)
+
+
 @QmlElement
 class Waveform(QQuickPaintedItem):
     changed = Signal()
@@ -226,6 +258,8 @@ class Waveform(QQuickPaintedItem):
         self._palette_colors = {}
         self._wave_cache = None
         self._wave_cache_peaks = None
+        self._spectrum_cache = None
+        self._spectrum_cache_data = None
         self._timecode_font = QFont("Menlo" if sys.platform == "darwin" else "Consolas", 9)
         self.setAcceptedMouseButtons(Qt.MouseButton.LeftButton | Qt.MouseButton.RightButton)
         self.setAcceptHoverEvents(True)
@@ -257,7 +291,27 @@ class Waveform(QQuickPaintedItem):
     def _analysis_changed(self):
         self._wave_cache = None
         self._wave_cache_peaks = None
+        self._spectrum_cache = None
+        self._spectrum_cache_data = None
         self.update()
+
+    def _spectrum_image(self, width, pixel_ratio):
+        spectrum = self._media.spectrum
+        columns = max(1, math.ceil(width * pixel_ratio))
+        key = (self._view, self._span, columns, self._spectral_contrast)
+        if self._spectrum_cache is not None and self._spectrum_cache[0] == key and self._spectrum_cache_data is spectrum:
+            return self._spectrum_cache[1]
+        values = spectrum_envelope(spectrum, self._view, self._span, columns) / 255
+        values = np.clip((values - 0.5) * self._spectral_contrast + 0.5, 0, 1)
+        rgb = SPECTRUM_PALETTE[np.rint(values * 255).astype(np.uint8)]
+        rgba = np.empty((spectrum.shape[1], columns, 4), dtype=np.uint8)
+        rgba[:, :, :3] = rgb.transpose(1, 0, 2)[::-1]
+        times = self._view + (np.arange(columns) + .5) * self._span / columns
+        rgba[:, :, 3] = np.where((times >= 0) & (times < len(spectrum) * SPECTRUM_FRAME_MS), 255, 0)
+        picture = QImage(rgba.data, columns, spectrum.shape[1], columns * 4, QImage.Format.Format_RGBA8888).copy()
+        self._spectrum_cache_data = spectrum
+        self._spectrum_cache = (key, picture)
+        return picture
 
     def _waveform_image(self, w, body_top, body_bottom, pixel_ratio, color):
         if body_bottom <= body_top:
@@ -452,24 +506,16 @@ class Waveform(QQuickPaintedItem):
         metrics = painter.fontMetrics()
         body_top, body_bottom = max(28, metrics.height() + 10), h - 12
         label_baseline = metrics.ascent() + 3
+        if self._spectral:
+            painter.fillRect(QRectF(0, body_top, w, max(0, body_bottom - body_top)), QColor('#000000'))
+            grid = QColor(255, 255, 255, 35)
         if self._media and len(self._media.peaks):
             if self._spectral and len(self._media.spectrum):
-                spectrum = self._media.spectrum
-                begin = int(self._view / SPECTRUM_FRAME_MS)
-                count = max(1, int(self._span / SPECTRUM_FRAME_MS))
-                selected = spectrum[max(0, begin):min(len(spectrum), begin + count)]
-                if len(selected):
-                    indices = np.minimum(len(selected) - 1, np.linspace(0, len(selected) - 1, w).astype(int))
-                    values = selected[indices].T[::-1].astype(np.float32) / 255
-                    # Contrast around the middle of the analyzed dB range.
-                    values = np.clip((values - 0.5) * self._spectral_contrast + 0.5, 0, 1)
-                    rgb = np.zeros((64, w, 3), dtype=np.uint8)
-                    rgb[:, :, 0] = np.clip(values * 320 - 90, 0, 255)
-                    rgb[:, :, 1] = np.clip(values * 280 - 25, 0, 255)
-                    rgb[:, :, 2] = np.clip(30 + values * 180, 0, 255)
-                    picture = QImage(rgb.data, w, 64, w * 3, QImage.Format.Format_RGB888)
-                    occupied = min(w, round(len(selected) / count * w))
-                    painter.drawImage(QRectF(0, body_top, occupied, body_bottom - body_top), picture)
+                picture = self._spectrum_image(w, painter.device().devicePixelRatioF())
+                painter.save()
+                painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
+                painter.drawImage(QRectF(0, body_top, w, body_bottom - body_top), picture)
+                painter.restore()
             else:
                 picture = self._waveform_image(w, body_top, body_bottom, painter.device().devicePixelRatioF(), waveform)
                 painter.drawImage(QRectF(0, body_top, w, body_bottom - body_top), picture)

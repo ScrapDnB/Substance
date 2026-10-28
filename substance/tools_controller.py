@@ -5,7 +5,7 @@ from pathlib import Path
 from PySide6.QtCore import QObject, Property, QThreadPool, Signal, Slot
 
 from .document import atomic_write, plain_text
-from .editor_tools import apply_plan, cue_info, lane_layout, plan
+from .editor_tools import apply_plan, cue_info, lane_layout, plan, shared_boundaries
 from .tool_jobs import AlignmentJob, SceneJob, video_identity
 from .transcription import MODEL_BY_ID, whisper_executable
 from .timecode import format_time
@@ -32,6 +32,13 @@ class ToolsController(QObject):
         self._media_context = None
         self._media_key = None
         self._display = backend.settings.value('audioDisplay', 'wave')
+        if self._display not in ('wave', 'spectrum'):
+            self._display = 'wave'
+            backend.settings.setValue('audioDisplay', self._display)
+        self._edit_mode = backend.settings.value('audioEditMode', 'tracks')
+        if self._edit_mode not in ('tracks', 'boundaries'):
+            self._edit_mode = 'tracks'
+            backend.settings.setValue('audioEditMode', self._edit_mode)
         self._snap_options = {name: backend.settings.value('snap/' + name, True, type=bool) for name in ('cuts', 'frames', 'cues')}
         self._lane_key, self._lanes = None, []
         self._drag_context = None
@@ -67,9 +74,20 @@ class ToolsController(QObject):
 
     @Slot(str)
     def setDisplayMode(self, value):
-        if value in ('wave', 'spectrum', 'tracks'):
+        if value in ('wave', 'spectrum'):
             self._display = value
             self.backend.settings.setValue('audioDisplay', value)
+            self.changed.emit()
+
+    @Property(str, notify=changed)
+    def editMode(self):
+        return self._edit_mode
+
+    @Slot(str)
+    def setEditMode(self, value):
+        if value in ('tracks', 'boundaries'):
+            self._edit_mode = value
+            self.backend.settings.setValue('audioEditMode', value)
             self.changed.emit()
 
     @Property('QVariantMap', notify=changed)
@@ -89,6 +107,13 @@ class ToolsController(QObject):
 
     @Slot(int, int, result=int)
     def snapTime(self, value, distance):
+        return self._snap_time(value, distance, self.backend.selection)
+
+    @Slot(int, int, int, int, result=int)
+    def snapJointTime(self, left, right, value, distance):
+        return self._snap_time(value, distance, self.backend.selection | {left, right})
+
+    def _snap_time(self, value, distance, excluded):
         media = self.backend.media_controller
         candidates = []
         if self._snap_options['cuts']:
@@ -97,7 +122,7 @@ class ToolsController(QObject):
             candidates.extend(media.keyframes)
         if self._snap_options['cues']:
             candidates.extend(edge for i, c in enumerate(self.backend.editor.document.cues)
-                              if i not in self.backend.selection for edge in (c.start, c.end))
+                              if i not in excluded for edge in (c.start, c.end))
         closest = min(candidates, key=lambda t: abs(t - value), default=value)
         return closest if abs(closest - value) <= distance else value
 
@@ -118,7 +143,8 @@ class ToolsController(QObject):
                  'before': '\n\n'.join(cue_info(cues[c][1]) for c in p.ids),
                  'after': '\n\n'.join(cue_info(c) for c in p.after) if p.after else 'Требуется ручная проверка',
                  'text': ' / '.join(plain_text(cues[c][1].output_text).replace('\n', ' ') for c in p.ids),
-                 'review': p.review, 'checked': p.selected, 'applicable': p.applicable} for p in self._proposals]
+                 'review': p.review, 'checked': p.selected, 'applicable': p.applicable,
+                 'uncertain': any(c.extras.get('semantic_timing', {}).get('uncertain') for c in p.after)} for p in self._proposals]
 
     @Property(bool, notify=changed)
     def analysisReady(self):
@@ -148,7 +174,7 @@ class ToolsController(QObject):
     def stale(self):
         return self._snapshot is not None and (self._options_stale or self._editor is not self.backend.editor
             or self._snapshot != self.backend.editor.document
-            or (self._kind in ('align', 'forced', 'retime', 'scenes') and self._media_context != self._context()))
+            or (self._kind in ('align', 'forced', 'semantic', 'retime', 'scenes') and self._media_context != self._context()))
 
     @Slot()
     def invalidate(self):
@@ -167,6 +193,9 @@ class ToolsController(QObject):
             text = plain_text(cue.output_text)
             duration = max(1, cue.end - cue.start)
             return {'text': text, 'start': cue.start, 'end': cue.end,
+                    'original': plain_text(cue.original), 'translation': plain_text(cue.translation) if cue.translation is not None else None,
+                    'originalGenerated': cue.extras.get('semantic_timing', {}).get('recognized_original', False),
+                    'warning': cue.extras.get('semantic_timing', {}).get('warning', ''),
                     'startText': format_time(cue.start), 'endText': format_time(cue.end),
                     'duration': round(duration / 1000, 2),
                     'cps': round(len(text.replace('\n', '')) * 1000 / duration, 1)}
@@ -317,7 +346,9 @@ class ToolsController(QObject):
                 task = SceneJob(b.media_controller.path, max(1, min(100, int(options.get('threshold', 10)))),
                                 b.media_controller.duration, b.data_dir / 'scene-cache')
                 self._start(task)
-            elif kind == 'align':
+            elif kind in ('align', 'semantic'):
+                if kind == 'semantic' and b.online.active:
+                    raise ValueError('Разбиение с переопределением оригинала доступно в локальном проекте. Сохраните локальную копию.')
                 if b.speech.busy:
                     raise ValueError('Дождитесь окончания распознавания или загрузки модели')
                 if not b.media_controller.path:
@@ -328,18 +359,31 @@ class ToolsController(QObject):
                 model_path = b.speech.directory / model.filename
                 if not model_path.is_file():
                     raise ValueError('Сначала скачайте выбранную модель кнопкой «Скачать модель»')
-                shift = max(100, min(10000, int(options.get('maxShift', 1000))))
-                options = dict(options, maxShift=shift)
-                start = max(0, min(self._snapshot.cues[i].start for i in indices) - shift)
-                end = max(self._snapshot.cues[i].end for i in indices) + shift
-                if b.media_controller.duration:
-                    end = min(end, b.media_controller.duration)
+                if kind == 'semantic':
+                    from .timecode import parse_time
+                    options.setdefault('cps', b.cpsLimit)
+                    if b.alignment_models.busy or not b.alignment_models.semanticInstalled:
+                        raise ValueError('Сначала скачайте многоязычную модель сопоставления.')
+                    start = parse_time(str(options.get('start', '00:00:00.000')))
+                    end = parse_time(str(options.get('end', '')))
+                    if not 0 <= start < end <= b.media_controller.duration:
+                        raise ValueError('Укажите начало и конец диапазона внутри открытого медиа.')
+                else:
+                    shift = max(100, min(10000, int(options.get('maxShift', 1000))))
+                    options = dict(options, maxShift=shift)
+                    start = max(0, min(self._snapshot.cues[i].start for i in indices) - shift)
+                    end = max(self._snapshot.cues[i].end for i in indices) + shift
+                    if b.media_controller.duration:
+                        end = min(end, b.media_controller.duration)
                 if end <= start:
                     raise ValueError('Реплики находятся за пределами аудио')
-                task = AlignmentJob(whisper_executable(), model, model_path, b.media_controller.path,
+                from .tool_jobs import SemanticTimingJob
+                job_class = SemanticTimingJob if kind == 'semantic' else AlignmentJob
+                extra = {'semantic_directory': b.alignment_models.directory} if kind == 'semantic' else {}
+                task = job_class(whisper_executable(), model, model_path, b.media_controller.path,
                                     b.media_controller.activeAudio, options.get('language', 'auto'), start, end, 42,
                                     cpu=bool(options.get('cpu', False)), document=self._snapshot,
-                                    indices=indices, options=options)
+                                    indices=indices, options=options, **extra)
                 self._start(task)
             self.changed.emit()
             if self._analysis_ready:
@@ -409,7 +453,7 @@ class ToolsController(QObject):
                 b.editor.transact('Маркеры смен планов', lambda d: d.media.update(shot_changes=record))
                 self._save_markers(record)
             else:
-                if self._kind in ('align', 'forced', 'retime') and self._context() != self._media_context:
+                if self._kind in ('align', 'forced', 'semantic', 'retime') and self._context() != self._media_context:
                     raise ValueError('Аудиодорожка изменилась; повторите анализ')
                 replacements = {old: [c.id for c in p.after] for p in self._proposals if p.selected and p.applicable for old in p.ids}
                 apply_plan(b.editor, self._snapshot, self._proposals)
@@ -444,6 +488,13 @@ class ToolsController(QObject):
             cues = p.after if after else [c for c in self._snapshot.cues if c.id in p.ids]
             if cues and self._context() == self._media_context:
                 self.backend.media_controller.playRange(min(c.start for c in cues), max(c.end for c in cues))
+
+    @Slot(int, int)
+    def playFragment(self, index, part):
+        if (self._snapshot and self._context() == self._media_context and
+                0 <= index < len(self._proposals) and 0 <= part < len(self._proposals[index].after)):
+            cue = self._proposals[index].after[part]
+            self.backend.media_controller.playRange(cue.start, cue.end)
 
     @Slot(int)
     def locate(self, index):
@@ -565,6 +616,27 @@ class ToolsController(QObject):
                 self.backend.editor.update(index, start=start, end=end)
             self.backend._guard(resize)
         self._drag_context = None
+
+    @Slot(int, int, int, result=bool)
+    def moveJoint(self, left, right, time):
+        b = self.backend
+        def move():
+            self._check_drag([left, right])
+            joint = next((j for j in shared_boundaries(b.editor.document.cues)
+                          if j['left'] == left and j['right'] == right), None)
+            if joint is None:
+                raise ValueError('Стык реплик изменился. Повторите перетаскивание.')
+            value = max(joint['minimum'], min(joint['maximum'], time))
+            def apply(doc):
+                a, c = doc.cues[left], doc.cues[right]
+                a.end = c.start = value
+                b.editor._sync_authored(doc, a, {'end': value})
+                b.editor._sync_authored(doc, c, {'start': value})
+            b.editor.transact('Перемещение стыка реплик', apply)
+        try:
+            return b._guard(move)
+        finally:
+            self._drag_context = None
 
     def shutdown(self):
         self.cancel()

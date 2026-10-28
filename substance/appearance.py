@@ -40,11 +40,13 @@ DEFAULTS = {
     "darkColors": {"editorBackground": "", "editorText": ""},
     "audio": {"waveGain": 100, "spectralContrast": 100},
     "timing": {
+        "editorFocus": False,
         "videoSide": "left", "videoVisible": True, "videoPercent": 47,
         "topPercent": 46, "audioVisible": True, "audioPosition": "middle",
         "audioHeight": 192,
     },
     "translation": {
+        "editorFocus": False,
         "videoSide": "right", "videoVisible": True, "videoPercent": 35,
         "audioVisible": True, "audioHeight": 192, "tableFirst": True,
         "editorHeight": 395, "contextVisible": True, "contextHeight": 300, "originalBelow": False,

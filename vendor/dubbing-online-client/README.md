@@ -1,9 +1,10 @@
 # Shared DubbingManager client
 
-Source snapshot of `DubbingManager/online/client`, version 0.1.0, copied on
-2026-10-16. This is the same client used by the current local Substance build.
+Source snapshot of `DubbingManager/online/client`, version 0.1.1. Originally
+copied on 2026-10-16 and updated for Substance on 2026-10-28. This is the client
+used by the current Substance build, including its ASS transfer changes.
 It contains no server, account data or credentials. `SOURCE.json` records
-SHA-256 hashes of the copied files.
+SHA-256 hashes of the shipped files.
 
 Install this package before installing Substance:
 

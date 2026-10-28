@@ -16,6 +16,113 @@ from substance import visuals  # noqa: F401
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def test_semantic_dialog_is_available_and_ordinary_alignment_has_text_source(ui):
+    b, w = ui
+    assert w.findChild(QObject, 'semanticTimingMenuItem')
+    b.openAlignment()
+    ordinary = w.findChild(QObject, 'alignmentDialog')
+    assert ordinary.findChild(QObject, 'alignmentTextSource')
+    ordinary.close()
+    b.openSemanticTiming()
+    dialog = w.findChild(QObject, 'semanticTimingDialog')
+    assert dialog.property('visible')
+    assert dialog.findChild(QObject, 'semanticRole').property('count') == 3
+    mode = dialog.findChild(QObject, 'semanticMode')
+    assert mode.property('count') == 2 and mode.property('currentIndex') == 0
+    assert not dialog.findChild(QObject, 'semanticLineWidth').property('enabled')
+    assert not dialog.findChild(QObject, 'semanticMaxDuration').property('enabled')
+    mode.setProperty('currentIndex', 1)
+    assert dialog.findChild(QObject, 'semanticLineWidth').property('enabled')
+    assert dialog.findChild(QObject, 'semanticMaxDuration').property('enabled')
+    assert dialog.findChild(QObject, 'semanticAudioLanguage')
+    assert dialog.findChild(QObject, 'semanticTextLanguage')
+    assert not dialog.findChild(QObject, 'semanticAnalyze').property('enabled')
+    assert not dialog.findChild(QObject, 'semanticApply').property('enabled')
+    dialog.close()
+
+
+@pytest.mark.parametrize('size', [(820, 700), (1280, 940)])
+def test_semantic_setup_and_review_fit_window_and_show_both_columns(ui, size, monkeypatch):
+    from substance.editor_tools import Proposal
+    b, w = ui
+    b.openSemanticTiming()
+    dialog = w.findChild(QObject, 'semanticTimingDialog')
+    dialog.resize(*size)
+    QTest.qWait(50)
+    for name in ('semanticMode', 'semanticRole', 'semanticAudioLanguage', 'semanticAnalyze', 'semanticApply'):
+        item = dialog.findChild(QObject, name)
+        point = item.mapToScene(QPointF())
+        assert point.x() >= 0 and point.y() >= 0, name
+        assert point.x()+item.width() <= dialog.width()+1, name
+        assert point.y()+item.height() <= dialog.height()+1, name
+    b.tools._snapshot = deepcopy(b.editor.document)
+    b.tools._editor = b.editor
+    b.tools._media_context = b.tools._context()
+    cue = deepcopy(b.editor.document.cues[0])
+    cue.original = cue.text = 'A real English phrase.'
+    cue.translation = 'Настоящая русская фраза.'
+    b.tools._proposals = [Proposal([cue.id], [cue], 'Проверка разбиения', False, True, True)]
+    b.tools._analysis_ready = True
+    b.tools.changed.emit()
+    b.tools.analysisCompleted.emit()
+    QTest.qWait(50)
+    assert dialog.property('reviewing')
+    assert b.tools.preview['afterCues'][0]['original'] == cue.original
+    assert b.tools.preview['afterCues'][0]['translation'] == cue.translation
+    play = dialog.findChild(QObject, 'toolPlayAfter')
+    point = play.mapToScene(QPointF())
+    assert 0 <= point.y() and point.y()+play.height() <= dialog.height()
+    assert dialog.findChild(QObject, 'semanticReview').height() < dialog.height()
+    played = []
+    monkeypatch.setattr(b.media_controller, 'playRange', lambda start, end: played.append((start, end)))
+    b.tools.playFragment(0, 0)
+    assert played == [(cue.start, cue.end)]
+    b.tools.checkAll(True)
+    assert b.tools.canApply
+    assert dialog.findChild(QObject, 'semanticApply').property('enabled')
+    b.tools.invalidate()
+    assert not b.tools.canApply
+    dialog.close()
+
+
+def test_uncertain_semantic_result_can_be_selected_applied_and_undone_in_dialog(ui):
+    import numpy as np
+    from substance.semantic_timing import semantic_plan
+
+    class Encoder:
+        def encode(self, texts):
+            return np.array([[1., 0.] if 'world' in text.lower() else [0., 1.] for text in texts])
+
+    b, w = ui
+    original = deepcopy(b.editor.document)
+    b.openSemanticTiming()
+    dialog = w.findChild(QObject, 'semanticTimingDialog')
+    proposals = semantic_plan(original, [0], [{'text': 'Music.', 'start': 500, 'end': 1500}],
+                              Encoder(), {'role': 'original'}, detector=lambda _: ('en', 1))
+    b.tools._snapshot = deepcopy(original)
+    b.tools._editor = b.editor
+    b.tools._media_context = b.tools._context()
+    b.tools._proposals = proposals
+    b.tools._analysis_ready = True
+    b.tools.changed.emit()
+    b.tools.analysisCompleted.emit()
+    QTest.qWait(50)
+    assert b.tools.rows[0]['uncertain']
+    assert b.tools.preview['afterCues'][0]['warning'].startswith('Неоднозначное')
+    assert not dialog.findChild(QObject, 'semanticApply').property('enabled')
+    current = dialog.findChild(QObject, 'alignmentAcceptCurrent')
+    assert current.property('enabled')
+    click(dialog, current)
+    assert dialog.findChild(QObject, 'semanticApply').property('enabled')
+    click(dialog, dialog.findChild(QObject, 'semanticApply'))
+    assert b.editor.document.cues[0].start == 500
+    assert b.editor.document.cues[0].extras['semantic_timing']['uncertain']
+    assert b.editor.document.source_lines == original.source_lines
+    b.undo()
+    assert b.editor.document == original
+    dialog.close()
+
+
 @pytest.fixture
 def ui(qt_application, tmp_path, monkeypatch):
     monkeypatch.setenv('SUBSTANCE_DATA_DIR', str(tmp_path))
@@ -86,16 +193,17 @@ def test_toolbar_opens_all_tools_and_repairs_with_one_undo(ui):
     dialog.close()
 
 
-def test_tracks_switch_retains_view_and_edits_selected_blocks(ui):
+def test_tracks_background_switch_retains_view_and_edits_selected_blocks(ui):
     b, w = ui
     pane = w.findChild(QObject, 'timingAudio')
     wave = pane.findChild(QObject, 'audioWaveform')
     wave.scrollTime(500)
     previous = wave.property('viewStart'), wave.property('span')
     selector = pane.findChild(QObject, 'audioDisplaySelector')
-    point = selector.mapToScene(QPointF(selector.width() * 5 / 6, selector.height() / 2)).toPoint()
+    point = selector.mapToScene(QPointF(selector.width() * 3 / 4, selector.height() / 2)).toPoint()
     QTest.mouseClick(w, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, point)
-    assert b.tools.displayMode == 'tracks'
+    assert b.tools.displayMode == 'spectrum'
+    assert selector.property('count') == 2
     QTest.qWait(80)
     assert w.findChild(QObject, 'subtitleTracks').property('visible')
     assert (wave.property('viewStart'), wave.property('span')) == previous
@@ -140,9 +248,10 @@ def test_native_toolbar_has_visible_tools(ui, monkeypatch):
     w.findChild(QObject, 'editorToolsDialog').close()
 
 
-def test_real_track_drag_changes_interval_and_is_undoable(ui):
+@pytest.mark.parametrize('display', ['wave', 'spectrum'])
+def test_real_track_drag_changes_interval_and_is_undoable(ui, display):
     b, w = ui
-    b.tools.setDisplayMode('tracks')
+    b.tools.setDisplayMode(display)
     QTest.qWait(80)
     block = visual_find(w.contentItem(), 'trackCue_2')
     assert block is not None
@@ -156,6 +265,198 @@ def test_real_track_drag_changes_interval_and_is_undoable(ui):
     assert b.editor.document.cues[2].end - b.editor.document.cues[2].start == 1800
     b.undo()
     assert b.editor.document.cues[2].start == start
+
+
+def test_tracks_use_full_height_for_solo_cues_and_separate_dense_overlaps(ui):
+    b, w = ui
+    doc = Document(cues=[Cue(start=0, end=500, text='Solo before'),
+                         *[Cue(start=1000, end=2000, text=f'Take {i}') for i in range(6)],
+                         Cue(start=2000, end=2500, text='Solo after')])
+    b._set_document(doc, '')
+    QTest.qWait(60)
+    tracks = w.findChild(QObject, 'subtitleTracks')
+    for index in (0, 7):
+        block = visual_find(w.contentItem(), f'trackCue_{index}')
+        assert block.y() == pytest.approx(3)
+        assert block.height() == pytest.approx(tracks.height() - 6)
+    blocks = [visual_find(w.contentItem(), f'trackCue_{i}') for i in range(1, 7)]
+    for block, following in zip(blocks, blocks[1:]):
+        assert block.height() > 0
+        assert block.y() + block.height() < following.y()
+    # Every dense take remains directly selectable, including those beyond three.
+    for index, block in enumerate(blocks, 1):
+        click(w, block)
+        assert b.currentIndex == index
+
+
+@pytest.mark.parametrize('display', ['wave', 'spectrum'])
+def test_tracks_selection_keeps_view_but_explicit_center_works(ui, display):
+    b, w = ui
+    wave = w.findChild(QObject, 'timingAudio').findChild(QObject, 'audioWaveform')
+    b.tools.setDisplayMode(display)
+    wave.setViewport(700, 4000)
+    previous = wave.property('viewStart'), wave.property('span')
+    b.select(2)
+    assert (wave.property('viewStart'), wave.property('span')) == previous
+    b.select(0, Qt.KeyboardModifier.ControlModifier.value)
+    b.select(1, Qt.KeyboardModifier.ShiftModifier.value)
+    assert (wave.property('viewStart'), wave.property('span')) == previous
+    click(w, w.findChild(QObject, 'audioCenterCue'))
+    assert wave.property('viewStart') == 0
+    wave.setViewport(*previous)
+    b.select(2)
+    assert (wave.property('viewStart'), wave.property('span')) == previous
+    click(w, w.findChild(QObject, 'audioCenterCue'))
+    assert wave.property('viewStart') == 1100
+    assert wave.property('span') == previous[1]
+
+
+def test_track_layout_reflows_after_move_and_undo(ui):
+    b, w = ui
+    b.tools.moveCues([1], 4000)
+    QTest.qWait(40)
+    tracks = w.findChild(QObject, 'subtitleTracks')
+    block = visual_find(w.contentItem(), 'trackCue_0')
+    assert block.height() == pytest.approx(tracks.height() - 6)
+    b.undo()
+    QTest.qWait(40)
+    block = visual_find(w.contentItem(), 'trackCue_0')
+    assert block.height() == pytest.approx(tracks.height() / 2 - 6)
+
+
+@pytest.mark.parametrize('edge', ['start', 'end'])
+def test_track_resize_from_full_height_block_is_undoable(ui, edge):
+    b, w = ui
+    QTest.qWait(40)
+    block = visual_find(w.contentItem(), 'trackCue_2')
+    before = deepcopy(b.editor.document.cues[2])
+    x = 2 if edge == 'start' else block.width() - 2
+    point = block.mapToScene(QPointF(x, block.height() / 2)).toPoint()
+    end_point = point + QPointF(35, 0).toPoint()
+    QTest.mousePress(w, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, point)
+    QTest.mouseMove(w, end_point, 30)
+    QTest.mouseRelease(w, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, end_point)
+    QTest.qWait(40)
+    after = b.editor.document.cues[2]
+    if edge == 'start':
+        assert after.start > before.start and after.end == before.end
+    else:
+        assert after.start == before.start and after.end > before.end
+    b.undo()
+    assert b.editor.document.cues[2] == before
+
+
+@pytest.mark.parametrize('side,direction', [('left', 1), ('right', -1)])
+def test_drag_joint_previews_both_cues_and_commits_one_undo(ui, side, direction):
+    b, w = ui
+    b._set_document(Document(cues=[Cue(start=0, end=2000, text='Left'),
+                                  Cue(start=2000, end=4000, text='Right')]), '')
+    wave = w.findChild(QObject, 'timingAudio').findChild(QObject, 'audioWaveform')
+    wave.setViewport(100, 5000)
+    QTest.qWait(40)
+    marker = 2000 + direction * round(40 * 5000 / wave.width()) + 3
+    b.media_controller.keyframes = [marker]
+    left = visual_find(w.contentItem(), 'trackCue_0')
+    right = visual_find(w.contentItem(), 'trackCue_1')
+    block = left if side == 'left' else right
+    x = block.width() - 2 if side == 'left' else 2
+    point = block.mapToScene(QPointF(x, block.height() / 2)).toPoint()
+    target = point + QPointF(direction * 40, 0).toPoint()
+    before = deepcopy(b.editor.document)
+    widths = left.width(), right.width()
+    history = len(b.editor.undo_stack)
+    QTest.mousePress(w, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.AltModifier, point)
+    QTest.mouseMove(w, target, 30)
+    QTest.qWait(20)
+    assert b.editor.document == before  # Preview only until release.
+    assert direction * (left.width() - widths[0]) > 0
+    assert direction * (right.width() - widths[1]) < 0
+    assert left.x() + left.width() == pytest.approx(right.x())
+    QTest.mouseRelease(w, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.AltModifier, target)
+    QTest.qWait(40)
+    a, c = b.editor.document.cues
+    assert a.end == c.start and direction * (a.end - 2000) > 0
+    assert a.end == marker
+    assert a.start == 0 and c.end == 4000
+    assert len(b.editor.undo_stack) == history + 1
+    assert wave.property('viewStart') == 100 and wave.property('span') == 5000
+    b.undo()
+    assert b.editor.document == before
+    b.redo()
+    assert b.editor.document.cues[0].end == b.editor.document.cues[1].start == a.end
+
+
+def test_plain_drag_shared_edge_edits_only_one_cue(ui):
+    b, w = ui
+    b._set_document(Document(cues=[Cue(start=0, end=2000, text='Left'),
+                                  Cue(start=2000, end=4000, text='Right')]), '')
+    QTest.qWait(40)
+    block = visual_find(w.contentItem(), 'trackCue_1')
+    point = block.mapToScene(QPointF(2, block.height() / 2)).toPoint()
+    target = point + QPointF(40, 0).toPoint()
+    QTest.mousePress(w, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, point)
+    QTest.mouseMove(w, target, 30)
+    QTest.mouseRelease(w, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, target)
+    QTest.qWait(30)
+    assert b.editor.document.cues[0].end == 2000
+    assert b.editor.document.cues[1].start > 2000
+
+
+def test_joint_clamps_both_durations_snaps_and_rejects_stale_drag(ui):
+    b, w = ui
+    b._set_document(Document(cues=[Cue(start=0, end=2000, text='Left'),
+                                  Cue(start=2000, end=4000, text='Right')]), '')
+    b.tools.beginTrackEdit()
+    assert b.tools.moveJoint(0, 1, -500)
+    assert b.editor.document.cues[0].end == b.editor.document.cues[1].start == 10
+    b.undo()
+    assert b.tools.moveJoint(0, 1, 5000)
+    assert b.editor.document.cues[0].end == b.editor.document.cues[1].start == 3990
+    b.undo()
+    assert b.tools.snapJointTime(0, 1, 2010, 50) == 2010  # Do not snap to the old joint.
+    b.media_controller.keyframes = [2030]
+    assert b.tools.snapJointTime(0, 1, 2010, 50) == 2030
+    b.tools.beginTrackEdit()
+    b.editor.update(1, start=2100)
+    before = deepcopy(b.editor.document)
+    assert not b.tools.moveJoint(0, 1, 2500)
+    assert b.editor.document == before
+    assert b.tools._drag_context is None
+
+
+def test_cancel_joint_drag_restores_preview_without_changing_document(ui):
+    b, w = ui
+    b._set_document(Document(cues=[Cue(start=0, end=2000, text='Left'),
+                                  Cue(start=2000, end=4000, text='Right')]), '')
+    QTest.qWait(40)
+    before = deepcopy(b.editor.document)
+    right = visual_find(w.contentItem(), 'trackCue_1')
+    point = right.mapToScene(QPointF(2, right.height() / 2)).toPoint()
+    QTest.mousePress(w, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.AltModifier, point)
+    QTest.mouseMove(w, point + QPointF(40, 0).toPoint(), 30)
+    assert right.property('displayStart') > 2000
+    visual_find(w.contentItem(), 'trackDrag_1').ungrabMouse()
+    QTest.qWait(20)
+    assert right.property('displayStart') == 2000
+    assert b.editor.document == before and not b.editor.undo_stack
+    QTest.mouseRelease(w, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.AltModifier, point)
+
+
+def test_joint_updates_authored_sources_and_undo_restores_them(ui):
+    b, w = ui
+    doc = Document(cues=[Cue(start=0, end=2000, text='Left', original='Left', extras={'authoring': True}),
+                         Cue(start=2000, end=4000, text='Right', original='Right', extras={'authoring': True})])
+    for cue in doc.cues:
+        doc.register_source(cue)
+    b._set_document(doc, '')
+    before = deepcopy(b.editor.document)
+    assert b.tools.moveJoint(0, 1, 2500)
+    a, c = b.editor.document.cues
+    assert b.editor.document.source_lines[a.source_ids[0]]['end'] == 2.5
+    assert b.editor.document.source_lines[c.source_ids[0]]['start'] == 2.5
+    assert a.text == 'Left' and c.text == 'Right'
+    b.undo()
+    assert b.editor.document == before
 
 
 def test_toolbar_fits_at_minimum_window_and_maximum_scale(ui):
@@ -182,11 +483,12 @@ def test_merging_current_second_cue_keeps_selection_on_result(ui):
     assert len(b.editor.document.cues[0].source_ids) == 2
 
 
-def test_track_blocks_overlay_wave_and_remain_translucent(ui):
+@pytest.mark.parametrize('display', ['wave', 'spectrum'])
+def test_track_blocks_overlay_background_and_remain_translucent(ui, display):
     b, w = ui
+    b.tools.setDisplayMode(display)
     pane = w.findChild(QObject, 'timingAudio')
     before_height = pane.height()
-    b.tools.setDisplayMode('tracks')
     QTest.qWait(50)
     wave = pane.findChild(QObject, 'audioWaveform')
     tracks = pane.findChild(QObject, 'subtitleTracks')
@@ -198,8 +500,8 @@ def test_track_blocks_overlay_wave_and_remain_translucent(ui):
     for i in range(3):
         block = visual_find(w.contentItem(), f'trackCue_{i}')
         assert block and 0 < block.property('color').alphaF() < 0.4
-    b.tools.setDisplayMode('wave')
-    assert wave.property('showCueRange')
+    b.tools.setDisplayMode('spectrum' if display == 'wave' else 'wave')
+    assert tracks.isVisible() and not wave.property('showCueRange')
 
 
 def test_alignment_setup_explains_scope_and_hides_technical_options(ui):

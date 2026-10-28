@@ -1,5 +1,6 @@
 """ASS exchange without inventing cue identity or changing source provenance."""
 
+from collections import defaultdict
 from copy import deepcopy
 import json
 import os
@@ -10,6 +11,7 @@ import tempfile
 from .documents import STAMP, read_subtitle, validate_document
 
 ORIGIN_PREFIX = "; DubbingManager-Origin: "
+MAPPING_VERSION = 2
 FIELDS = [
     "Layer",
     "Start",
@@ -199,8 +201,63 @@ def read_ass(path):
     }
 
 
-def mapped_document(base, imported, mapping):
+def automatic_mapping(base, imported):
+    """Match only unique identities; never infer identity from row position.
+
+    Check uniqueness against the entire file, including already matched rows,
+    so an added duplicate/split cannot steal a cue from another incoming row.
+    """
+    cues, rows = base["cues"], imported["rows"]
+    expected = [row_fields(c) for c in cues]
+    incoming_fields = [
+        {
+            **row["ass_fields"],
+            "Start": ass_time(row["start"]),
+            "End": ass_time(row["end"]),
+            "Text": ass_text(row["text"]),
+        }
+        for row in rows
+    ]
+    for values in (*expected, *incoming_fields):
+        values["Name"] = (
+            values.get("Name", "").strip() or values.get("Actor", "").strip()
+        )
+    mapping, used = {}, set()
+    # Simultaneous lines are normal. Character names distinguish equal text at
+    # equal times; they are matching evidence, never a request to rebind cards.
+    for fields in (
+        ("Start", "End", "Text", "Name"),
+        ("Start", "End", "Name"),
+        ("Start", "End", "Text"),
+        ("Start", "End"),
+        ("Text", "Name"),
+        ("Text",),
+    ):
+        left, right = defaultdict(list), defaultdict(list)
+        for i, cue in enumerate(cues):
+            key = (cue["comment"], *(expected[i][f] for f in fields))
+            left[key].append(cue["id"])
+        for i, row in enumerate(rows):
+            values = incoming_fields[i]
+            key = (row["comment"], *(values[f] for f in fields))
+            right[key].append(str(i))
+        for key, incoming in right.items():
+            targets = left.get(key, [])
+            if len(incoming) == len(targets) == 1:
+                row, target = incoming[0], targets[0]
+                if row not in mapping and target not in used:
+                    mapping[row] = target
+                    used.add(target)
+    return mapping
+
+
+def mapped_document(base, imported, mapping, *, partial=False):
     """One incoming row -> one existing cue, or explicit skip. Never delete/add."""
+    if partial:
+        mapping = {
+            str(i): mapping.get(str(i), "skip")
+            for i in range(len(imported["rows"]))
+        }
     if set(mapping) != {str(i) for i in range(len(imported["rows"]))}:
         raise ValueError("Сопоставьте или пропустите каждую строку ASS")
     ids = {c["id"] for c in base["cues"]}
@@ -233,7 +290,7 @@ def mapped_document(base, imported, mapping):
                 "Text",
                 "Name",
                 "Actor",
-            ) and value != expected.get(key):
+            ) and not equivalent_field(key, value, expected.get(key)):
                 cue.setdefault("ass_fields", {})[key] = value
                 formatting_changed = True
         if formatting_changed:
@@ -266,3 +323,13 @@ def mapped_document(base, imported, mapping):
         )
     validate_document(result)
     return result
+
+
+def equivalent_field(key, value, expected):
+    # Aegisub pads margins to four digits. This does not change presentation.
+    if key in ("Layer", "MarginL", "MarginR", "MarginV"):
+        try:
+            return int(value) == int(expected)
+        except (TypeError, ValueError):
+            pass
+    return value == expected

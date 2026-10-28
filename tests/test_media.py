@@ -10,7 +10,7 @@ from PySide6.QtCore import QEventLoop, QTimer
 from PySide6.QtMultimedia import QVideoSink
 from PySide6.QtWidgets import QApplication
 
-from substance.media import AudioAnalysis, KeyframeAnalysis, MediaController, ffmpeg_executable, ffprobe_executable, process_options
+from substance.media import AudioAnalysis, KeyframeAnalysis, MediaController, SpectrogramAnalysis, SPECTRUM_BINS, SPECTRUM_FFT_SIZE, AUDIO_SAMPLE_RATE, ffmpeg_executable, ffprobe_executable, process_options
 from substance.tasks import ExtractTask, SpellingTask
 from substance.document import DEFAULT_ASS
 from substance.visuals import AssRenderer, libass_path
@@ -50,7 +50,7 @@ def test_audio_spectrum_metadata_and_keyframes(app, media):
     assert 7900 <= len(peaks) <= 8100
     assert np.max(peaks) > 0.05
     assert 190 <= len(spectrum) <= 210
-    assert spectrum.shape[1] == 64
+    assert spectrum.shape[1] == SPECTRUM_BINS
     assert np.max(spectrum) > 0
     if ffprobe_executable():
         assert metadata[0]['fps'] == 24
@@ -82,7 +82,7 @@ def test_waveform_resolves_submillisecond_peaks_and_keeps_final_samples(app, tmp
     peaks, spectrum = results[0]
     assert peaks.dtype == np.float32
     assert len(peaks) == 4004
-    assert spectrum.shape == (101, 64)
+    assert spectrum.shape == (101, SPECTRUM_BINS)
     assert peaks[2000] == pytest.approx(0.5)
     assert np.all(peaks[2001:2004] == 0)
     assert peaks[2004] == pytest.approx(0.75)
@@ -183,7 +183,7 @@ def test_silent_video_has_empty_audio_without_error(app, tmp_path):
     worker.run()
     assert not errors
     assert results[0][0].size == 0
-    assert results[0][1].shape == (0, 64)
+    assert results[0][1].shape == (0, SPECTRUM_BINS)
 
 
 def test_shutdown_unloads_media_and_stops_analysis_without_gui_events(app, media):
@@ -202,3 +202,35 @@ def test_shutdown_unloads_media_and_stops_analysis_without_gui_events(app, media
     assert all(worker.cancelled.is_set() for thread, worker in workers)
     controller.shutdown()
     app.processEvents()
+
+
+def test_spectrum_resolves_close_tones_without_decoder_chunk_seams():
+    samples = np.arange(16013) / AUDIO_SAMPLE_RATE
+    signal = (.4 * np.sin(2 * np.pi * 1000 * samples)
+              + .2 * np.sin(2 * np.pi * 1093.75 * samples)).astype(np.float32)
+
+    def analyze(chunks):
+        analyzer = SpectrogramAnalysis()
+        blocks = [analyzer.feed(chunk) for chunk in chunks]
+        blocks.append(analyzer.feed(np.empty(0, dtype=np.float32), final=True))
+        return np.concatenate(blocks)
+
+    together = analyze([signal])
+    streamed = analyze(np.split(signal, [1, 257, 637, 8000, 16000]))
+    np.testing.assert_array_equal(together, streamed)
+    assert together.shape == (101, SPECTRUM_BINS)
+    levels = together[20].astype(float)
+    # Two tones less than one old 125 Hz band apart remain separate peaks.
+    a, b = (round(hz * SPECTRUM_FFT_SIZE / AUDIO_SAMPLE_RATE) - 1 for hz in (1000, 1093.75))
+    assert levels[a] > max(levels[a-1], levels[a+1])
+    assert levels[b] > max(levels[b-1], levels[b+1])
+    assert levels[a] > levels[b] > levels[a+2]
+
+
+@pytest.mark.parametrize('length', [0, 1, 159, 160, 161, 511, 16013])
+def test_spectrum_silence_and_partial_final_window(length):
+    analyzer = SpectrogramAnalysis()
+    result = np.concatenate([analyzer.feed(np.zeros(length, dtype=np.float32)),
+                             analyzer.feed(np.empty(0, dtype=np.float32), final=True)])
+    assert result.shape == ((length + 159) // 160, SPECTRUM_BINS)
+    assert not result.any()

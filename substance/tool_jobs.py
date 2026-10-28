@@ -89,6 +89,29 @@ class AlignmentJob(TranscriptionJob):
         result = align_words(self.document, self.indices, self.words,
                              max_shift=int(self.options.get('maxShift', 1000)),
                              lead=int(self.options.get('lead', 0)), tail=int(self.options.get('tail', 120)),
-                             edges=self.options.get('edges', 'both'), cps=int(self.options.get('cps', 17)))
+                             edges=self.options.get('edges', 'both'), cps=int(self.options.get('cps', 17)),
+                             original=bool(self.options.get('original', True)))
+        self.check_cancelled()
+        self.signals.result.emit(result)
+
+
+class SemanticTimingJob(TranscriptionJob):
+    def __init__(self, *args, document, indices, options, semantic_directory, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.document, self.indices, self.options = document, indices, options
+        self.semantic_directory = semantic_directory
+        self.capture_words = True
+        self.progress_scale = .65
+
+    def execute(self):
+        from .semantic_models import SentenceEncoder, detect_language
+        from .semantic_timing import semantic_plan
+        super().execute()
+        self.check_cancelled()
+        self.signals.progress.emit(.68, 'Подготовка многоязычной модели…')
+        encoder = SentenceEncoder(self.semantic_directory, self.cancelled, self.check_cancelled)
+        result = semantic_plan(self.document, self.indices, self.words, encoder,
+                               dict(self.options, rangeEnd=self.end), detector=detect_language,
+                               check=self.check_cancelled, progress=self.signals.progress.emit)
         self.check_cancelled()
         self.signals.result.emit(result)

@@ -12,7 +12,7 @@ import re
 
 from .api import ApiError, normalize_server_url
 from .documents import STAMP, from_substance, to_substance, validate_document
-from .merge import merge_documents
+from .merge import display, merge_documents
 from .repository import RemoteDocumentRepository, atomic_json
 
 ORIGIN = "dubbing_online_origin"
@@ -367,6 +367,8 @@ class PortableTransfer(RemoteDocumentRepository):
         return self.preview()
 
     def prepare_ass(self, imported, filename, base_revision=0):
+        from .ass_transfer import MAPPING_VERSION, automatic_mapping, mapped_document
+
         origin = imported.get("origin")
         if origin is not None:
             reply = self._transfer_base(validate_origin(origin))
@@ -375,8 +377,7 @@ class PortableTransfer(RemoteDocumentRepository):
                 raise ValueError(
                     "ASS без происхождения: укажите номер серверной версии, которую редактировали"
                 )
-            # Without embedded provenance the human chooses the base explicitly;
-            # every row still requires a deliberate identity mapping below.
+            # Without embedded provenance the human chooses the base explicitly.
             if self._state and (self.pending or self._state.get("transfer")):
                 raise ValueError("Сначала завершите или отмените сохранённую загрузку")
             reply = self.client.request(
@@ -385,13 +386,16 @@ class PortableTransfer(RemoteDocumentRepository):
             self._validate_reply(reply)
             if reply["revision"] != base_revision:
                 raise ValueError("Базовая версия ASS не совпадает с серверной историей")
+        mapping = automatic_mapping(reply["document"], imported)
         return self._prepare(
             reply,
-            reply["document"],
+            mapped_document(reply["document"], imported, mapping, partial=True),
             filename,
             ass={
                 "imported": imported,
-                "mapping": {},
+                "mapping": mapping,
+                "automatic_mapping_done": True,
+                "automatic_mapping_version": MAPPING_VERSION,
                 "base": reply["document"],
                 "locked": False,
             },
@@ -425,15 +429,17 @@ class PortableTransfer(RemoteDocumentRepository):
             details["mapping"][row] = target
         else:
             details["mapping"].pop(row, None)
-        state["draft"] = (
-            mapped_document(details["base"], details["imported"], details["mapping"])
-            if len(details["mapping"]) == len(details["imported"]["rows"])
-            else deepcopy(details["base"])
+        if row not in details.setdefault("manual_rows", []):
+            details["manual_rows"].append(row)
+        state["draft"] = mapped_document(
+            details["base"], details["imported"], details["mapping"], partial=True
         )
         self._persist(state)
         return self.preview()
 
     def preview(self):
+        from .ass_transfer import output_text
+
         if not self._state or not self._state.get("transfer"):
             return {}
         server = self.remote or {
@@ -460,12 +466,57 @@ class PortableTransfer(RemoteDocumentRepository):
             "retry": retry,
             "error": error,
         }
+        # Internal ASS cache invalidation is not an extra user edit. Retain any
+        # conflict, even on these fields, so the publish contract stays explicit.
+        visible_changes = [
+            dict(r) for r in changes
+            if r["key"] in conflict_keys or not (
+                len(r["path"]) >= 5
+                and r["path"][0] == "cues"
+                and r["path"][2:4] == ["extras", STAMP]
+                and r["path"][4] in ("original_line", "field_order")
+            )
+        ]
+        file_changes = [r for r in visible_changes if r["mineChanged"]]
+        changed_ids = {
+            r["path"][1] for r in file_changes
+            if r["path"][0] == "cues" and len(r["path"]) > 1
+        }
+        cue_by_id = {c["id"]: c for c in self._state["confirmed"]["cues"]}
+        document_cues = [
+            {c["id"]: c for c in document["cues"]}
+            for document in (self._state["confirmed"], self.snapshot, server["document"])
+        ]
+        for row in visible_changes:
+            path = row["path"]
+            cue = (
+                cue_by_id.get(path[1])
+                if len(path) > 1 and path[0] == "cues" else None
+            )
+            row["context"] = (
+                f"{self._time(cue['start'])} – {self._time(cue['end'])}"
+                if cue else "Документ"
+            )
+            row["conflict"] = row["key"] in conflict_keys
+            if len(path) == 3 and path[0] == "cues" and path[2] in ("translation", "start", "end"):
+                for field, cues in zip(("base", "mine", "server"), document_cues):
+                    value = cues[path[1]]
+                    row[field] = (
+                        display(output_text(value)) if path[2] == "translation"
+                        else self._time(value[path[2]])
+                    )
+        result.update(
+            review_changes=visible_changes,
+            changed_cues=len(changed_ids),
+            file_fields=len(file_changes),
+            server_fields=sum(
+                r["serverChanged"] and not r["mineChanged"] for r in visible_changes
+            ),
+        )
         details = self._state.get("ass")
         if details:
-            from .ass_transfer import output_text
-
             def label(c, i, text):
-                return f"{i + 1}. [{c['start']}–{c['end']} мс] {text}"
+                return f"{i + 1}. {self._time(c['start'])} – {self._time(c['end'])} · {text}"
 
             targets = [
                 {
@@ -480,6 +531,8 @@ class PortableTransfer(RemoteDocumentRepository):
                 mapping_locked=details["locked"],
                 mapping_complete=len(details["mapping"])
                 == len(details["imported"]["rows"]),
+                unresolved_rows=len(details["imported"]["rows"]) - len(details["mapping"]),
+                unchanged_cues=len(details["base"]["cues"]) - len(changed_ids),
                 mapping_rows=[
                     {
                         "key": str(i),
@@ -499,8 +552,36 @@ class PortableTransfer(RemoteDocumentRepository):
             )
         return result
 
+    @staticmethod
+    def _time(ms):
+        return f"{ms // 60000:02}:{ms // 1000 % 60:02}.{ms % 1000 // 10:02}"
+
     def refresh(self):
+        from .ass_transfer import MAPPING_VERSION, automatic_mapping, mapped_document
+
         if self._state and self._state.get("transfer"):
+            details = self._state.get("ass")
+            if (
+                details and details.get("automatic_mapping_version", 0) < MAPPING_VERSION
+                and not details["locked"] and not self.pending
+            ):
+                state = deepcopy(self._state)
+                details = state["ass"]
+                used = set(details["mapping"].values())
+                matches = automatic_mapping(details["base"], details["imported"])
+                for row, target in matches.items():
+                    if (
+                        row not in details["mapping"] and target not in used
+                        and row not in details.get("manual_rows", [])
+                    ):
+                        details["mapping"][row] = target
+                        used.add(target)
+                details["automatic_mapping_done"] = True
+                details["automatic_mapping_version"] = MAPPING_VERSION
+                state["draft"] = mapped_document(
+                    details["base"], details["imported"], details["mapping"], partial=True
+                )
+                self._persist(state)
             # A prepared no-op still needs to retain its file/base for comparison.
             reply = self.client.request("GET", self.base + "/document")
             self._remember_remote(reply)

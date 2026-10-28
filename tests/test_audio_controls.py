@@ -19,6 +19,36 @@ from substance.visuals import Waveform
 ROOT = Path(__file__).resolve().parents[1]
 
 
+@pytest.mark.parametrize('saved,expected', [(None, 'wave'), ('wave', 'wave'),
+                                         ('spectrum', 'spectrum'), ('tracks', 'wave'), ('invalid', 'wave')])
+def test_audio_background_migrates_and_persists(qt_application, tmp_path, monkeypatch, saved, expected):
+    monkeypatch.setenv('SUBSTANCE_DATA_DIR', str(tmp_path))
+    settings = QSettings(str(tmp_path / 'settings.ini'), QSettings.Format.IniFormat)
+    if saved is not None:
+        settings.setValue('audioDisplay', saved)
+        settings.sync()
+    backend = Backend()
+    try:
+        assert backend.tools.displayMode == expected
+        assert backend.tools.editMode == 'tracks'
+        backend.tools.setEditMode('boundaries')
+        backend.tools.setEditMode('invalid')
+        assert backend.tools.editMode == 'boundaries'
+        backend.tools.setDisplayMode('tracks')
+        assert backend.tools.displayMode == expected
+        backend.tools.setDisplayMode('spectrum' if expected == 'wave' else 'wave')
+        chosen = backend.tools.displayMode
+        backend.settings.sync()
+    finally:
+        backend.shutdown()
+    restored = Backend()
+    try:
+        assert restored.tools.displayMode == chosen
+        assert restored.tools.editMode == 'boundaries'
+    finally:
+        restored.shutdown()
+
+
 def test_audio_preferences_validate_and_restore(tmp_path):
     settings = QSettings(str(tmp_path / 'settings.ini'), QSettings.Format.IniFormat)
     preferences = AppearanceSettings(settings)
@@ -149,9 +179,11 @@ def test_audio_sliders_keyboard_persistence_and_volume_sync(ui, mode):
 
 
 @pytest.mark.parametrize('mode', ['timing', 'translation'])
-def test_controls_fit_small_window_with_largest_ui(ui, mode):
+@pytest.mark.parametrize('edit_mode', ['tracks', 'boundaries'])
+def test_controls_fit_small_window_with_largest_ui(ui, mode, edit_mode):
     backend, window = ui
     backend.setMode(mode)
+    backend.tools.setEditMode(edit_mode)
     backend.appearance.setValue('general', 'uiScale', 125)
     backend.appearance.setValue('general', 'sidebarWidth', 340)
     window.resize(980, 650)
@@ -176,11 +208,13 @@ def test_controls_fit_small_window_with_largest_ui(ui, mode):
 
 
 @pytest.mark.parametrize('workspace', ['timing', 'translation'])
-@pytest.mark.parametrize('display', ['wave', 'spectrum', 'tracks'])
-def test_trackpad_events_reach_audio_view_and_preserve_pointer_time(ui, workspace, display):
+@pytest.mark.parametrize('display', ['wave', 'spectrum'])
+@pytest.mark.parametrize('edit_mode', ['tracks', 'boundaries'])
+def test_trackpad_events_reach_audio_view_and_preserve_pointer_time(ui, workspace, display, edit_mode):
     backend, window = ui
     backend.setMode(workspace)
     backend.editorTools.setDisplayMode(display)
+    backend.tools.setEditMode(edit_mode)
     QTest.qWait(80)
     pane = window.findChild(QObject, 'timingAudio' if workspace == 'timing' else 'translationAudio')
     wave = pane.findChild(QObject, 'audioWaveform')
@@ -188,15 +222,15 @@ def test_trackpad_events_reach_audio_view_and_preserve_pointer_time(ui, workspac
     wave.setViewport(5000, 10000)
     QTest.qWait(20)
     local = QPointF(wave.width() * 0.7, wave.height() * 0.6)
-    if display == 'tracks':
-        # Exercise navigation through an actual cue's MouseArea, not empty space.
-        def descendants(item):
-            for child in item.childItems():
-                yield child
-                yield from descendants(child)
+    # Exercise navigation through an actual cue's MouseArea, not empty space.
+    def descendants(item):
+        for child in item.childItems():
+            yield child
+            yield from descendants(child)
 
-        items = list(descendants(wave.parentItem()))
-        drag = next(item for item in items if item.objectName() == 'trackDrag_4')
+    items = list(descendants(wave.parentItem()))
+    drag = next(item for item in items if item.objectName() == 'trackDrag_4')
+    if edit_mode == 'tracks':
         local = wave.mapFromItem(drag, QPointF(drag.width() / 2, drag.height() / 2))
     fraction = local.x() / wave.width()
     scene = wave.mapToScene(local)
@@ -251,4 +285,112 @@ def test_trackpad_events_reach_audio_view_and_preserve_pointer_time(ui, workspac
     tracks = pane.findChild(QObject, 'subtitleTracks')
     assert tracks.property('span') == wave.span
     assert tracks.property('viewStart') == wave.viewStart
+    assert backend.editor.document.to_dict() == before
+
+
+@pytest.mark.parametrize('workspace', ['timing', 'translation'])
+@pytest.mark.parametrize('display', ['wave', 'spectrum'])
+@pytest.mark.parametrize('edit_mode', ['tracks', 'boundaries'])
+def test_table_double_click_centers_tracks_without_changing_zoom(ui, monkeypatch, workspace, display, edit_mode):
+    backend, window = ui
+    backend.setMode(workspace)
+    backend.tools.setDisplayMode(display)
+    backend.tools.setEditMode(edit_mode)
+    QTest.qWait(80)
+    pane = window.findChild(QObject, 'timingAudio' if workspace == 'timing' else 'translationAudio')
+    wave = pane.findChild(QObject, 'audioWaveform')
+    tracks = pane.findChild(QObject, 'subtitleTracks')
+    assert tracks.isVisible() == (edit_mode == 'tracks')
+    assert wave.showCueRange == (edit_mode == 'boundaries')
+
+    def find_visible(item, name):
+        if item.objectName() == name and item.isVisible():
+            return item
+        for child in item.childItems():
+            result = find_visible(child, name)
+            if result is not None:
+                return result
+        return None
+
+    label = find_visible(window.contentItem(), 'tableSource_2')
+    assert label is not None
+    point = label.mapToScene(QPointF(label.width() / 2, label.height() / 2)).toPoint()
+    seeks = []
+    monkeypatch.setattr(backend.media_controller, 'seek', seeks.append)
+    before = backend.editor.document.to_dict()
+    # Both a different row and the already selected row must recenter.
+    for _ in range(2):
+        wave.setViewport(60000, 2000)
+        QTest.mouseClick(window, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, point)
+        QTest.qWait(20)
+        assert backend.currentIndex == 2 and wave.viewStart == 60000
+        QTest.mouseDClick(window, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, point)
+        QTest.qWait(40)
+        cue = backend.editor.document.cues[2]
+        assert wave.span == 2000
+        assert wave.viewStart == round((cue.start + cue.end - wave.span) / 2)
+        assert seeks[-1] == cue.start
+    assert backend.editor.document.to_dict() == before
+
+
+@pytest.mark.parametrize('workspace', ['timing', 'translation'])
+def test_audio_tabs_switch_background_and_edit_mode_independently(ui, workspace):
+    backend, window = ui
+    backend.setMode(workspace)
+    QTest.qWait(50)
+    pane = window.findChild(QObject, 'timingAudio' if workspace == 'timing' else 'translationAudio')
+    wave = pane.findChild(QObject, 'audioWaveform')
+    tracks = pane.findChild(QObject, 'subtitleTracks')
+    display_tabs = pane.findChild(QObject, 'audioDisplaySelector')
+    edit_tabs = pane.findChild(QObject, 'audioEditModeSelector')
+    assert display_tabs.property('count') == edit_tabs.property('count') == 2
+    wave.setViewport(5000, 6000)
+    before = backend.editor.document.to_dict()
+    height = pane.height()
+    selection = backend.currentIndex, set(backend.selection)
+    for edit_mode, index in [('boundaries', 1), ('tracks', 0)]:
+        point = edit_tabs.mapToScene(QPointF(edit_tabs.width() * (index + .5) / 2, edit_tabs.height() / 2)).toPoint()
+        QTest.mouseClick(window, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, point)
+        assert backend.tools.editMode == edit_mode
+        for display, index in [('spectrum', 1), ('wave', 0)]:
+            point = display_tabs.mapToScene(QPointF(display_tabs.width() * (index + .5) / 2, display_tabs.height() / 2)).toPoint()
+            QTest.mouseClick(window, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, point)
+            QTest.qWait(20)
+            assert backend.tools.displayMode == display and backend.tools.editMode == edit_mode
+            assert wave.spectral == (display == 'spectrum')
+            assert wave.showCueRange == (edit_mode == 'boundaries')
+            assert tracks.isVisible() == (edit_mode == 'tracks')
+            assert (wave.viewStart, wave.span) == (5000, 6000)
+            assert pane.height() == height
+    assert (backend.currentIndex, backend.selection) == selection
+    assert backend.editor.document.to_dict() == before
+
+
+@pytest.mark.parametrize('workspace', ['timing', 'translation'])
+@pytest.mark.parametrize('display', ['wave', 'spectrum'])
+@pytest.mark.parametrize('edge', ['start', 'end'])
+def test_boundaries_handles_edit_current_cue_and_undo(ui, workspace, display, edge):
+    backend, window = ui
+    backend.setMode(workspace)
+    backend.tools.setDisplayMode(display)
+    backend.tools.setEditMode('boundaries')
+    backend.select(2)
+    QTest.qWait(50)
+    pane = window.findChild(QObject, 'timingAudio' if workspace == 'timing' else 'translationAudio')
+    wave = pane.findChild(QObject, 'audioWaveform')
+    wave.setViewport(4000, 6000)
+    wave.setProperty('snap', False)
+    before = backend.editor.document.to_dict()
+    cue = backend.editor.document.cues[2]
+    original = cue.start, cue.end
+    point = wave.mapToScene(QPointF(wave._x(getattr(cue, edge)), wave.bodyTop + 8)).toPoint()
+    target = point + QPoint(40, 0)
+    QTest.mousePress(window, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, point)
+    QTest.mouseMove(window, target, 30)
+    QTest.mouseRelease(window, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, target)
+    QTest.qWait(30)
+    cue = backend.editor.document.cues[2]
+    assert (cue.start > original[0] and cue.end == original[1]) if edge == 'start' else (cue.start == original[0] and cue.end > original[1])
+    assert (wave.viewStart, wave.span) == (4000, 6000)
+    backend.undo()
     assert backend.editor.document.to_dict() == before

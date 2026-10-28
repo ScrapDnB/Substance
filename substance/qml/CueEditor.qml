@@ -4,8 +4,18 @@ import QtQuick.Layouts
 
 Pane {
     id: panel
+    // Cue fields share the document's history, including structural edits.
+    readonly property bool documentHistoryScope: true
     required property var colors
     property bool translationMode: backend.mode === "translation"
+    readonly property alias textEditor: editTextArea
+    readonly property bool keepEditorFocus: (translationMode ? backend.appearance.translation : backend.appearance.timing).editorFocus
+    function restoreEditorFocus() {
+        if (!visible) return
+        if (keepEditorFocus && backend.current.exists) editTextArea.forceActiveFocus()
+        else navigationFocus.forceActiveFocus()
+    }
+    Item { id: navigationFocus; objectName: "editorNavigationFocus" }
     property bool loading: true
     property string stagedText: ""
     property bool inheritancePending: false
@@ -112,7 +122,7 @@ Pane {
     Connections {
         target: backend
         function onCurrentChanged() { checksPopup.close(); reviewsPopup.close(); panel.reload() }
-        function onFocusEditor() { editTextArea.forceActiveFocus() }
+        function onFocusEditor() { panel.restoreEditorFocus() }
         function onHighlightWord(word) {
             let start = editTextArea.text.indexOf(word)
             if (start >= 0) {
@@ -292,6 +302,7 @@ Pane {
                         id: editColumn
                         readonly property real minimumTextHeight: editHeading.implicitHeight + formattingTools.implicitHeight + 48 + 2 * spacing
                         Layout.preferredWidth: 1
+                        Layout.minimumWidth: 0
                         Layout.fillWidth: true
                         Layout.fillHeight: true
                         spacing: 5
@@ -311,15 +322,39 @@ Pane {
                                 ToolTip.text: "Скрыть коды тегов и показать жирный, курсив, подчёркивание и зачёркивание. Теги остаются в тексте и при копировании. Полное оформление ASS смотрите на видео."
                             }
                         }
-                        RowLayout {
+                        GridLayout {
                             id: formattingTools
+                            objectName: "editorFormattingTools"
                             Layout.fillWidth: true
-                            spacing: 4
-                            AssFormatButton { editor: panel; tag: "b"; label: "Жирный"; command: "formatBold" }
-                            AssFormatButton { editor: panel; tag: "i"; label: "Курсив"; command: "formatItalic" }
-                            AssFormatButton { editor: panel; tag: "u"; label: "Подчёркивание"; command: "formatUnderline" }
-                            AssFormatButton { editor: panel; tag: "s"; label: "Зачёркивание" }
-                            Item { Layout.fillWidth: true }
+                            Layout.minimumWidth: 0
+                            columns: width >= formatButtons.implicitWidth + focusToggle.implicitWidth + columnSpacing ? 2 : 1
+                            columnSpacing: 4
+                            rowSpacing: 0
+                            RowLayout {
+                                id: formatButtons
+                                Layout.fillWidth: true
+                                spacing: 4
+                                AssFormatButton { editor: panel; tag: "b"; label: "Жирный"; command: "formatBold" }
+                                AssFormatButton { editor: panel; tag: "i"; label: "Курсив"; command: "formatItalic" }
+                                AssFormatButton { editor: panel; tag: "u"; label: "Подчёркивание"; command: "formatUnderline" }
+                                AssFormatButton { editor: panel; tag: "s"; label: "Зачёркивание" }
+                                Item { Layout.fillWidth: true }
+                            }
+                            CheckBox {
+                                id: focusToggle
+                                Layout.alignment: Qt.AlignRight
+                                objectName: "editorFocusToggle"
+                                text: "Фокус"
+                                font.pixelSize: Math.round(11 * panel.uiScale)
+                                checked: panel.keepEditorFocus
+                                onClicked: {
+                                    backend.appearance.setValue(panel.translationMode ? "translation" : "timing", "editorFocus", checked)
+                                    panel.restoreEditorFocus()
+                                }
+                                ToolTip.visible: hovered
+                                ToolTip.text: "Возвращать фокус в текст при переходе между репликами. Без фокуса в поле пробел запускает и останавливает воспроизведение."
+                                Accessible.name: "Фокус в редакторе текста"
+                            }
                         }
                         RowLayout {
                             Layout.fillWidth: true
