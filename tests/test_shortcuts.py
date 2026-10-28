@@ -110,7 +110,10 @@ def test_other_layout_commands_typing_and_custom_shortcut(tmp_path, monkeypatch)
         field.forceActiveFocus()
         send('я', 6)
         assert b.count == before
-        send('я', 6, Qt.ControlModifier | Qt.ShiftModifier)
+        if sys.platform == 'win32':
+            send('н', 16)  # Windows Redo is Ctrl+Y.
+        else:
+            send('я', 6, Qt.ControlModifier | Qt.ShiftModifier)
         assert b.count == before + 1
         before = b.count
         send('х', 33, Qt.ControlModifier | Qt.ShiftModifier)

@@ -100,7 +100,9 @@ def test_mode_switch_keeps_playing_video_and_delivering_frames(ui, tmp_path):
     b, window = ui
     video = tmp_path / 'switch.mp4'
     subprocess.run([ffmpeg_executable(), '-nostdin', '-v', 'error', '-f', 'lavfi',
-                    '-i', 'testsrc2=size=320x180:rate=24:duration=4', '-c:v', 'libx264',
+                    # Allow slow hosted renderers to finish all four switches
+                    # before playback reaches the end of the fixture.
+                    '-i', 'testsrc2=size=320x180:rate=24:duration=20', '-c:v', 'libx264',
                     '-y', str(video)], check=True, timeout=30, **process_options())
 
     def wait(ms):
@@ -114,10 +116,11 @@ def test_mode_switch_keeps_playing_video_and_delivering_frames(ui, tmp_path):
     b.openMediaPath(str(video))
     for _ in range(100):
         wait(20)
-        if media._sink.videoFrame().isValid():
+        if media._sink.videoFrame().isValid() and not media._priming and not media.playing:
             break
     sink = media._sink
     assert sink.videoFrame().isValid()
+    assert not media._priming and not media.playing
     frames = []
     sink.videoFrameChanged.connect(lambda frame: frames.append(frame.startTime()))
     media.toggle()
